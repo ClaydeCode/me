@@ -1,0 +1,17 @@
+# Secrets and local config
+config.env
+
+# Runtime state and data
+state.json
+repos/
+logs/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+
+# Claude local config
+.claude/settings.local.json

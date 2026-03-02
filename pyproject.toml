@@ -1,0 +1,15 @@
+[project]
+name = "clayde"
+version = "0.1.0"
+description = "Clayde — autonomous GitHub issue agent"
+requires-python = ">=3.12"
+dependencies = [
+    "jinja2>=3.1.6",
+]
+
+[project.scripts]
+clayde = "clayde.orchestrator:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
