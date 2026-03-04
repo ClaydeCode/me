@@ -62,7 +62,6 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 - **Full issue lifecycle**: Plan → approval → implement → PR, with comments at each stage
 - **Rate-limit resilience**: Detects Claude usage limits and automatically retries
 - **Safety gates**: Whitelist + approval checks prevent unauthorized work
-- **Interactive mode**: Can also be invoked manually via a `/gh-issue` slash command for interactive sessions
 
 ---
 
@@ -83,8 +82,8 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 
 `config.env` (plain `KEY=VALUE`):
 
-| Key | Purpose |
-|---|---|
-| `GITHUB_TOKEN` | Fine-grained PAT (Issues, PRs, Contents R/W) |
-| `GITHUB_USERNAME` | `ClaydeCode` |
-| `CLAYDE_ENABLED` | Set to `true` to activate |
+| Key | Purpose                               |
+|---|---------------------------------------|
+| `GITHUB_TOKEN` | Classic Token (full repo permissions) |
+| `GITHUB_USERNAME` | `ClaydeCode`                          |
+| `CLAYDE_ENABLED` | Set to `true` to activate             |
