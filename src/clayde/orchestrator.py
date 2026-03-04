@@ -112,7 +112,9 @@ def main():
             except Exception as e:
                 log.error("ERROR retrying interrupted issue %s: %s", url, e)
                 from clayde.state import update_issue_state
-                update_issue_state(url, {"status": "failed"})
+                # Stay in interrupted state so we keep retrying —
+                # the limit may persist for hours until usage resets.
+                update_issue_state(url, {"status": "interrupted"})
 
         elif status == "failed":
             log.info("Skipping failed issue: %s (clear state to retry)", url)
