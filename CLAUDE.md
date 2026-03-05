@@ -184,3 +184,15 @@ The file `gh-issue.md` is a Claude Code slash-command prompt (`/gh-issue <number
 Allowed tools for interactive work: `Bash(gh:*)`, `Bash(git:*)`, `Bash(just:*)`, `Bash(python:*)`, `Bash(pytest:*)`, `Bash(npm:*)`, `Bash(uv:*)`, `Bash(apprise:*)`, `Read`, `Write`, `Edit`, `Glob`, `Grep`
 
 Branch naming for interactive work: `issue/{number}-short-desc`
+
+---
+
+## Testing
+
+Run the test suite after any feature development or bug fix:
+
+```
+uv run pytest
+```
+
+Always ensure all tests pass before committing changes.
