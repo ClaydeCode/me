@@ -16,7 +16,7 @@ def is_plan_approved(g: Github, owner: str, repo: str, number: int, comment_id: 
     """Return True if APPROVER reacted +1 to the plan comment AND a whitelisted user reacted +1 to the issue."""
     repo_obj = g.get_repo(f"{owner}/{repo}")
     issue = repo_obj.get_issue(number)
-    comment = repo_obj.get_issue_comment(comment_id)
+    comment = repo_obj.get_comment(comment_id)
     approver_approved = any(
         r.content == "+1" and r.user.login == APPROVER
         for r in comment.get_reactions()
