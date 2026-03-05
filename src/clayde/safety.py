@@ -2,7 +2,7 @@
 
 from github import Github
 
-from clayde.config import APPROVER, WHITELISTED_USERS
+from clayde.config import WHITELISTED_USERS
 
 
 def is_issue_authorized(issue) -> bool:
@@ -13,15 +13,10 @@ def is_issue_authorized(issue) -> bool:
 
 
 def is_plan_approved(g: Github, owner: str, repo: str, number: int, comment_id: int) -> bool:
-    """Return True if APPROVER reacted +1 to the plan comment AND a whitelisted user reacted +1 to the issue."""
+    """Return True if a whitelisted user reacted +1 to the plan comment."""
     repo_obj = g.get_repo(f"{owner}/{repo}")
-    issue = repo_obj.get_issue(number)
-    comment = repo_obj.get_comment(comment_id)
-    approver_approved = any(
-        r.content == "+1" and r.user.login == APPROVER
-        for r in comment.get_reactions()
-    )
-    return approver_approved and _has_whitelisted_reaction(issue.get_reactions())
+    comment = repo_obj.get_issue_comment(comment_id)
+    return _has_whitelisted_reaction(comment.get_reactions())
 
 
 def _has_whitelisted_reaction(reactions) -> bool:

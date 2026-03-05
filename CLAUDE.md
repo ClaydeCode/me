@@ -49,7 +49,7 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
     {owner}__{repo}/      # cloned repos (naming: owner__repo)
   src/clayde/
     __init__.py
-    config.py             # CLAYDE_DIR, paths, APPROVER, WHITELISTED_USERS,
+    config.py             # CLAYDE_DIR, paths, WHITELISTED_USERS,
                           #   load_config(), setup_logging(), get_github_client()
     state.py              # load_state(), save_state(), get_issue_state(),
                           #   update_issue_state()
@@ -77,6 +77,7 @@ Plain `KEY=VALUE` file (no shell quoting). Keys:
 | `GITHUB_TOKEN` | Fine-grained PAT with Issues R/W, Pull Requests R/W, Contents R/W |
 | `GITHUB_USERNAME` | `ClaydeCode` |
 | `CLAYDE_ENABLED` | Set to `true` to activate; any other value causes immediate exit |
+| `WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames (e.g. `max-tet,ClaydeCode`) |
 
 Config is loaded by `load_config()` and `GH_TOKEN` is exported from it at startup.
 
@@ -110,9 +111,9 @@ Interrupted entries also store: `interrupted_phase` (`"planning"` or `"implement
 Two independent checks must pass before any work begins:
 
 1. **Issue-level gate** (before planning): issue must be created by a whitelisted user OR have a 👍 reaction from a whitelisted user on the issue itself.
-2. **Plan approval gate** (before implementation): the plan comment must have a 👍 reaction from `APPROVER` (`max-tet`) AND the issue itself must have a 👍 from a whitelisted user.
+2. **Plan approval gate** (before implementation): the plan comment must have a 👍 reaction from any whitelisted user.
 
-Whitelisted users: `["max-tet"]` (defined in `config.py`).
+Whitelisted users: configured via `WHITELISTED_USERS` in `config.env` (comma-separated).
 
 ---
 
@@ -142,7 +143,7 @@ Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 ## Safety Gates (`safety.py`)
 
 - `is_issue_authorized(issue)` — True if issue author is whitelisted OR a whitelisted user reacted +1.
-- `is_plan_approved(g, owner, repo, number, comment_id)` — True if APPROVER reacted +1 to plan comment AND a whitelisted user reacted +1 to the issue.
+- `is_plan_approved(g, owner, repo, number, comment_id)` — True if a whitelisted user reacted +1 to the plan comment.
 
 ---
 

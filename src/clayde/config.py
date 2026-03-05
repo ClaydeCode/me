@@ -9,8 +9,7 @@ CLAYDE_DIR = "/home/ubuntu/clayde"
 STATE_FILE = os.path.join(CLAYDE_DIR, "state.json")
 LOG_FILE = os.path.join(CLAYDE_DIR, "logs", "agent.log")
 REPOS_DIR = os.path.join(CLAYDE_DIR, "repos")
-APPROVER = "max-tet"
-WHITELISTED_USERS = ["max-tet", "ClaydeCode"]
+WHITELISTED_USERS: list[str] = []
 
 
 def load_config():
@@ -22,6 +21,8 @@ def load_config():
             if line and not line.startswith("#") and "=" in line:
                 key, _, value = line.partition("=")
                 config[key.strip()] = value.strip()
+    raw = config.get("WHITELISTED_USERS", "max-tet,ClaydeCode")
+    WHITELISTED_USERS[:] = [u.strip() for u in raw.split(",") if u.strip()]
     return config
 
 
