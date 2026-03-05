@@ -1,122 +1,55 @@
-"""GitHub CLI wrappers and repo management."""
+"""GitHub API helpers using PyGitHub."""
 
-import json
 import logging
-import os
 import re
-import subprocess
 
-from clayde.config import APPROVER, REPOS_DIR, WHITELISTED_USERS
+from github import Github, GithubException
 
 log = logging.getLogger("clayde.github")
 
 
-def gh_api(endpoint, method="GET", fields=None):
-    """Call gh api and return parsed JSON."""
-    cmd = ["gh", "api", endpoint]
-    if method != "GET":
-        cmd += ["--method", method]
-    for k, v in (fields or {}).items():
-        cmd += ["-f", f"{k}={v}"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"gh api {endpoint} failed: {result.stderr}")
-    return json.loads(result.stdout) if result.stdout.strip() else {}
-
-
-def parse_issue_url(url):
+def parse_issue_url(url: str) -> tuple[str, str, int]:
     m = re.match(r"https://github\.com/([^/]+)/([^/]+)/issues/(\d+)", url)
     if not m:
         raise ValueError(f"Cannot parse issue URL: {url}")
     return m.group(1), m.group(2), int(m.group(3))
 
 
-def fetch_issue(owner, repo, number):
-    return gh_api(f"/repos/{owner}/{repo}/issues/{number}")
+def fetch_issue(g: Github, owner: str, repo: str, number: int):
+    return g.get_repo(f"{owner}/{repo}").get_issue(number)
 
 
-def fetch_issue_comments(owner, repo, number):
-    return gh_api(f"/repos/{owner}/{repo}/issues/{number}/comments")
+def fetch_issue_comments(g: Github, owner: str, repo: str, number: int):
+    return list(g.get_repo(f"{owner}/{repo}").get_issue(number).get_comments())
 
 
-def post_comment(owner, repo, number, body):
-    data = gh_api(
-        f"/repos/{owner}/{repo}/issues/{number}/comments",
-        method="POST",
-        fields={"body": body},
-    )
-    return data["id"]
+def post_comment(g: Github, owner: str, repo: str, number: int, body: str) -> int:
+    """Post a comment on an issue and return the comment ID."""
+    comment = g.get_repo(f"{owner}/{repo}").get_issue(number).create_comment(body)
+    return comment.id
 
 
-def get_default_branch(owner, repo):
-    data = gh_api(f"/repos/{owner}/{repo}")
-    return data.get("default_branch", "main")
+def fetch_comment(g: Github, owner: str, repo: str, comment_id: int):
+    return g.get_repo(f"{owner}/{repo}").get_issue_comment(comment_id)
 
 
-def ensure_repo(owner, repo):
-    """Clone or update a repository under REPOS_DIR."""
-    repo_path = os.path.join(REPOS_DIR, f"{owner}__{repo}")
-    clone_url = f"https://github.com/{owner}/{repo}.git"
-
-    if os.path.isdir(os.path.join(repo_path, ".git")):
-        default_branch = get_default_branch(owner, repo)
-        log.info("Updating %s/%s (checkout %s + pull)", owner, repo, default_branch)
-        subprocess.run(
-            ["git", "checkout", default_branch],
-            cwd=repo_path, capture_output=True,
-        )
-        subprocess.run(["git", "pull"], cwd=repo_path, capture_output=True)
-    else:
-        log.info("Cloning %s/%s", owner, repo)
-        os.makedirs(REPOS_DIR, exist_ok=True)
-        result = subprocess.run(
-            ["git", "clone", clone_url, repo_path],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Clone failed: {result.stderr}")
-
-    return repo_path
+def get_default_branch(g: Github, owner: str, repo: str) -> str:
+    return g.get_repo(f"{owner}/{repo}").default_branch
 
 
-def get_assigned_issues():
-    """Fetch all open issues assigned to the authenticated user."""
+def get_assigned_issues(g: Github) -> list:
+    """Return all open issues assigned to the authenticated user."""
     try:
-        return gh_api("/issues?filter=assigned&state=open&per_page=100")
-    except RuntimeError as e:
+        return list(g.get_user().get_issues(filter="assigned", state="open"))
+    except GithubException as e:
         log.error("Failed to fetch assigned issues: %s", e)
         return []
 
 
-def check_approval(owner, repo, comment_id):
-    """Check if APPROVER has reacted with thumbs-up to the plan comment."""
-    try:
-        reactions = gh_api(
-            f"/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"
-        )
-    except RuntimeError:
-        return False
-    return any(
-        r.get("content") == "+1" and r.get("user", {}).get("login") == APPROVER
-        for r in reactions
-    )
-
-
-def is_whitelisted_author(issue):
-    """Check if the issue was created by a whitelisted user."""
-    author = issue.get("user", {}).get("login", "")
-    return author in WHITELISTED_USERS
-
-
-def has_whitelisted_thumbsup(owner, repo, number):
-    """Check if any whitelisted user has reacted with +1 to the issue itself."""
-    try:
-        reactions = gh_api(
-            f"/repos/{owner}/{repo}/issues/{number}/reactions"
-        )
-    except RuntimeError:
-        return False
-    return any(
-        r.get("content") == "+1" and r.get("user", {}).get("login") in WHITELISTED_USERS
-        for r in reactions
-    )
+def find_open_pr(g: Github, owner: str, repo: str, number: int) -> str | None:
+    """Return the HTML URL of an open PR for clayde/issue-{number}, or None."""
+    branch = f"clayde/issue-{number}"
+    pulls = list(g.get_repo(f"{owner}/{repo}").get_pulls(
+        state="open", head=f"{owner}:{branch}"
+    ))
+    return pulls[0].html_url if pulls else None

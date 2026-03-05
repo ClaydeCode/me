@@ -3,6 +3,8 @@
 import logging
 import os
 
+from github import Auth, Github
+
 CLAYDE_DIR = "/home/ubuntu/clayde"
 STATE_FILE = os.path.join(CLAYDE_DIR, "state.json")
 LOG_FILE = os.path.join(CLAYDE_DIR, "logs", "agent.log")
@@ -21,6 +23,11 @@ def load_config():
                 key, _, value = line.partition("=")
                 config[key.strip()] = value.strip()
     return config
+
+
+def get_github_client() -> Github:
+    """Return an authenticated PyGitHub client using GH_TOKEN from the environment."""
+    return Github(auth=Auth.Token(os.environ["GH_TOKEN"]))
 
 
 def setup_logging():
