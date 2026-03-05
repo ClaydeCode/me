@@ -14,8 +14,7 @@ def is_issue_authorized(issue) -> bool:
 
 def is_plan_approved(g: Github, owner: str, repo: str, number: int, comment_id: int) -> bool:
     """Return True if a whitelisted user reacted +1 to the plan comment."""
-    repo_obj = g.get_repo(f"{owner}/{repo}")
-    comment = repo_obj.get_issue_comment(comment_id)
+    comment = g.get_repo(f"{owner}/{repo}").get_issue(number).get_comment(comment_id)
     return _has_whitelisted_reaction(comment.get_reactions())
 
 

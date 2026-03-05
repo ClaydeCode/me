@@ -46,7 +46,7 @@ def run(issue_url: str) -> None:
     default_branch = get_default_branch(g, owner, repo)
     repo_path = ensure_repo(owner, repo, default_branch)
 
-    plan_comment = fetch_comment(g, owner, repo, plan_comment_id)
+    plan_comment = fetch_comment(g, owner, repo, number, plan_comment_id)
     plan_text = plan_comment.body
 
     all_comments = fetch_issue_comments(g, owner, repo, number)

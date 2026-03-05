@@ -29,8 +29,8 @@ def post_comment(g: Github, owner: str, repo: str, number: int, body: str) -> in
     return comment.id
 
 
-def fetch_comment(g: Github, owner: str, repo: str, comment_id: int):
-    return g.get_repo(f"{owner}/{repo}").get_issue_comment(comment_id)
+def fetch_comment(g: Github, owner: str, repo: str, number: int, comment_id: int):
+    return g.get_repo(f"{owner}/{repo}").get_issue(number).get_comment(comment_id)
 
 
 def get_default_branch(g: Github, owner: str, repo: str) -> str:
