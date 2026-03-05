@@ -50,18 +50,20 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
   src/clayde/
     __init__.py
     config.py             # CLAYDE_DIR, paths, APPROVER, WHITELISTED_USERS,
-                          #   load_config(), setup_logging()
+                          #   load_config(), setup_logging(), get_github_client()
     state.py              # load_state(), save_state(), get_issue_state(),
                           #   update_issue_state()
-    github.py             # gh_api(), parse_issue_url(), fetch_issue(),
-                          #   fetch_issue_comments(), post_comment(),
-                          #   get_default_branch(), ensure_repo(),
-                          #   get_assigned_issues(), check_approval(),
-                          #   is_whitelisted_author(), has_whitelisted_thumbsup()
+    github.py             # PyGitHub wrappers: parse_issue_url(), fetch_issue(),
+                          #   fetch_issue_comments(), post_comment(), fetch_comment(),
+                          #   get_default_branch(), get_assigned_issues(), find_open_pr()
+    git.py                # ensure_repo() — clone or update repos under REPOS_DIR
+    safety.py             # is_issue_authorized(), is_plan_approved() — safety gates
     claude.py             # invoke_claude(prompt, repo_path) — subprocess to claude CLI
-    planner.py            # do_plan(issue_url) — research + post plan comment
-    implementer.py        # do_implement(issue_url) — implement + open PR + post result
     orchestrator.py       # main() — cron entry point, state machine dispatcher
+    tasks/
+      __init__.py
+      plan.py             # run(issue_url) — research + post plan comment
+      implement.py        # run(issue_url) — implement + open PR + post result
 ```
 
 ---
@@ -128,18 +130,25 @@ invoke_claude(prompt, repo_path)
 
 ---
 
-## GitHub API Wrapper (`github.py`)
+## GitHub API (`github.py`)
 
-All GitHub calls go through `gh_api(endpoint, method, fields)` which shells out to `gh api`. Returns parsed JSON or raises `RuntimeError` on non-zero exit.
+Uses PyGitHub. All functions accept a `Github` client instance as first argument.
 
 Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
-`ensure_repo()` clones on first use, then `git checkout <default_branch> && git pull` on subsequent calls.
+`git.ensure_repo()` clones on first use, then `git checkout <default_branch> && git pull` on subsequent calls.
 
 ---
 
-## Plan Phase (`planner.py`)
+## Safety Gates (`safety.py`)
 
-1. Fetch issue metadata and comments via GitHub API
+- `is_issue_authorized(issue)` — True if issue author is whitelisted OR a whitelisted user reacted +1.
+- `is_plan_approved(g, owner, repo, number, comment_id)` — True if APPROVER reacted +1 to plan comment AND a whitelisted user reacted +1 to the issue.
+
+---
+
+## Plan Task (`tasks/plan.py`)
+
+1. Fetch issue metadata and comments via PyGitHub
 2. `ensure_repo()` to have the code on disk
 3. Build prompt with issue body, labels, comments, repo path
 4. `invoke_claude()` — Claude explores the repo and returns a markdown plan
@@ -148,7 +157,7 @@ Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 
 ---
 
-## Implementation Phase (`implementer.py`)
+## Implementation Task (`tasks/implement.py`)
 
 1. Fetch plan comment text and any discussion comments posted after the plan
 2. `ensure_repo()` to reset to latest default branch
@@ -163,7 +172,7 @@ Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 
 Format: `[YYYY-MM-DD HH:MM:SS] [clayde.<module>] <message>`
 File: `logs/agent.log` (appended; cron also redirects stderr there)
-Logger names: `clayde.orchestrator`, `clayde.planner`, `clayde.implementer`, `clayde.github`, `clayde.claude`
+Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.github`, `clayde.claude`
 
 ---
 

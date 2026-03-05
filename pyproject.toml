@@ -5,6 +5,7 @@ description = "Clayde — autonomous GitHub issue agent"
 requires-python = ">=3.12"
 dependencies = [
     "jinja2>=3.1.6",
+    "PyGitHub>=2.5.0",
 ]
 
 [project.scripts]
