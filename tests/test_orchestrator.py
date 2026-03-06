@@ -12,16 +12,22 @@ from clayde.orchestrator import (
 )
 
 
+def _mock_settings(enabled=False, github_token="tok"):
+    s = MagicMock()
+    s.enabled = enabled
+    s.github_token = github_token
+    return s
+
+
 class TestMain:
     def test_exits_when_disabled(self):
-        with patch("clayde.orchestrator.load_config", return_value={"CLAYDE_ENABLED": "false"}):
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=False)):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
 
     def test_returns_when_claude_unavailable(self):
-        config = {"CLAYDE_ENABLED": "true", "GITHUB_TOKEN": "tok"}
-        with patch("clayde.orchestrator.load_config", return_value=config), \
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.is_claude_available", return_value=False), \
              patch("clayde.orchestrator.get_github_client") as mock_gc:
@@ -29,36 +35,32 @@ class TestMain:
             mock_gc.assert_not_called()
 
     def test_returns_when_no_assigned_issues(self):
-        config = {"CLAYDE_ENABLED": "true", "GITHUB_TOKEN": "tok"}
-        with patch("clayde.orchestrator.load_config", return_value=config), \
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[]), \
              patch("clayde.orchestrator.load_state", return_value={"issues": {}}):
-            main()  # Should not raise
+            main()
 
     def test_dispatches_new_issue(self):
-        config = {"CLAYDE_ENABLED": "true", "GITHUB_TOKEN": "tok"}
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
-        with patch("clayde.orchestrator.load_config", return_value=config), \
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client") as mock_gc, \
+             patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
              patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
              patch("clayde.orchestrator._handle_new_issue") as mock_handle:
-            # Patch _handle_new_issue at module level
             main()
             mock_handle.assert_called_once()
 
     def test_skips_done_issues(self):
-        config = {"CLAYDE_ENABLED": "true", "GITHUB_TOKEN": "tok"}
         issue = MagicMock()
         issue.html_url = "url1"
         state = {"issues": {"url1": {"status": "done"}}}
-        with patch("clayde.orchestrator.load_config", return_value=config), \
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \

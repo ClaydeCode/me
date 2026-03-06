@@ -2,12 +2,12 @@
 
 from github import Github
 
-from clayde.config import WHITELISTED_USERS
+from clayde.config import get_settings
 
 
 def is_issue_authorized(issue) -> bool:
     """Return True if the issue author is whitelisted OR a whitelisted user reacted +1."""
-    if issue.user.login in WHITELISTED_USERS:
+    if issue.user.login in get_settings().whitelisted_users:
         return True
     return _has_whitelisted_reaction(issue.get_reactions())
 
@@ -20,6 +20,6 @@ def is_plan_approved(g: Github, owner: str, repo: str, number: int, comment_id: 
 
 def _has_whitelisted_reaction(reactions) -> bool:
     return any(
-        r.content == "+1" and r.user.login in WHITELISTED_USERS
+        r.content == "+1" and r.user.login in get_settings().whitelisted_users
         for r in reactions
     )

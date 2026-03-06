@@ -1,74 +1,115 @@
 """Tests for clayde.config."""
 
 import logging
-import os
-from unittest.mock import mock_open, patch
+from unittest.mock import patch
 
-from clayde import config
+from clayde.config import Settings, _reset_settings, get_settings, setup_logging
 
 
-class TestLoadConfig:
-    def test_parses_key_value_pairs(self, monkeypatch):
-        fake_env = "KEY1=value1\nKEY2=value2\n"
-        monkeypatch.setattr(config, "WHITELISTED_USERS", [])
-        with patch("builtins.open", mock_open(read_data=fake_env)):
-            result = config.load_config()
-        assert result["KEY1"] == "value1"
-        assert result["KEY2"] == "value2"
+class TestSettings:
+    def test_loads_from_env_vars(self, monkeypatch):
+        monkeypatch.setenv("CLAYDE_GITHUB_TOKEN", "tok123")
+        monkeypatch.setenv("CLAYDE_ENABLED", "true")
+        monkeypatch.setenv("CLAYDE_WHITELISTED_USERS_RAW", "alice,bob")
+        s = Settings(_env_file=None)
+        assert s.github_token == "tok123"
+        assert s.enabled is True
+        assert s.whitelisted_users == ["alice", "bob"]
 
-    def test_skips_comments_and_blank_lines(self, monkeypatch):
-        fake_env = "# comment\n\n  \nKEY=val\n"
-        monkeypatch.setattr(config, "WHITELISTED_USERS", [])
-        with patch("builtins.open", mock_open(read_data=fake_env)):
-            result = config.load_config()
-        assert result == {"KEY": "val"}
+    def test_defaults(self, monkeypatch):
+        monkeypatch.delenv("CLAYDE_GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("CLAYDE_ENABLED", raising=False)
+        monkeypatch.delenv("CLAYDE_WHITELISTED_USERS_RAW", raising=False)
+        monkeypatch.delenv("CLAYDE_DIR", raising=False)
+        s = Settings(_env_file=None)
+        assert s.github_token == ""
+        assert s.enabled is False
+        assert s.github_username == "ClaydeCode"
+        assert s.whitelisted_users == ["max-tet", "ClaydeCode"]
 
-    def test_populates_whitelisted_users(self, monkeypatch):
-        fake_env = "WHITELISTED_USERS=alice,bob, charlie \n"
-        monkeypatch.setattr(config, "WHITELISTED_USERS", [])
-        with patch("builtins.open", mock_open(read_data=fake_env)):
-            config.load_config()
-        assert config.WHITELISTED_USERS == ["alice", "bob", "charlie"]
+    def test_loads_from_env_file(self, tmp_path, monkeypatch):
+        env_file = tmp_path / "config.env"
+        env_file.write_text("CLAYDE_GITHUB_TOKEN=file-tok\nCLAYDE_ENABLED=true\n")
+        monkeypatch.delenv("CLAYDE_GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("CLAYDE_ENABLED", raising=False)
+        s = Settings(_env_file=str(env_file))
+        assert s.github_token == "file-tok"
+        assert s.enabled is True
 
-    def test_default_whitelisted_users_when_missing(self, monkeypatch):
-        fake_env = "SOME_KEY=val\n"
-        monkeypatch.setattr(config, "WHITELISTED_USERS", [])
-        with patch("builtins.open", mock_open(read_data=fake_env)):
-            config.load_config()
-        assert config.WHITELISTED_USERS == ["max-tet", "ClaydeCode"]
+    def test_comma_separated_whitelisted_users(self, monkeypatch):
+        monkeypatch.setenv("CLAYDE_WHITELISTED_USERS_RAW", "alice, bob , charlie")
+        s = Settings(_env_file=None)
+        assert s.whitelisted_users == ["alice", "bob", "charlie"]
 
-    def test_value_with_equals_sign(self, monkeypatch):
-        fake_env = "TOKEN=abc=def=ghi\n"
-        monkeypatch.setattr(config, "WHITELISTED_USERS", [])
-        with patch("builtins.open", mock_open(read_data=fake_env)):
-            result = config.load_config()
-        assert result["TOKEN"] == "abc=def=ghi"
+    def test_derived_paths(self, monkeypatch):
+        monkeypatch.setenv("CLAYDE_DIR", "/custom/dir")
+        s = Settings(_env_file=None)
+        assert s.state_file == "/custom/dir/state.json"
+        assert s.log_file == "/custom/dir/logs/agent.log"
+        assert s.repos_dir == "/custom/dir/repos"
+
+    def test_value_with_equals_sign(self, tmp_path, monkeypatch):
+        env_file = tmp_path / "config.env"
+        env_file.write_text("CLAYDE_GITHUB_TOKEN=abc=def=ghi\n")
+        monkeypatch.delenv("CLAYDE_GITHUB_TOKEN", raising=False)
+        s = Settings(_env_file=str(env_file))
+        assert s.github_token == "abc=def=ghi"
+
+
+class TestGetSettings:
+    def test_returns_singleton(self, monkeypatch):
+        _reset_settings()
+        monkeypatch.setenv("CLAYDE_GITHUB_TOKEN", "tok")
+        with patch("clayde.config.Settings", wraps=Settings) as mock_cls:
+            mock_cls.side_effect = lambda **kw: Settings(_env_file=None)
+            s1 = get_settings()
+            s2 = get_settings()
+        assert s1 is s2
+        _reset_settings()
+
+    def test_reset_clears_cache(self, monkeypatch):
+        _reset_settings()
+        monkeypatch.setenv("CLAYDE_GITHUB_TOKEN", "tok1")
+        with patch("clayde.config.Settings", side_effect=lambda **kw: Settings(_env_file=None)):
+            s1 = get_settings()
+        _reset_settings()
+        monkeypatch.setenv("CLAYDE_GITHUB_TOKEN", "tok2")
+        with patch("clayde.config.Settings", side_effect=lambda **kw: Settings(_env_file=None)):
+            s2 = get_settings()
+        assert s1 is not s2
+        _reset_settings()
 
 
 class TestGetGithubClient:
-    def test_uses_gh_token_from_env(self, monkeypatch):
-        monkeypatch.setenv("GH_TOKEN", "test-token-123")
-        with patch("clayde.config.Github") as mock_gh, \
-             patch("clayde.config.Auth.Token") as mock_token:
-            mock_token.return_value = "auth-obj"
-            config.get_github_client()
-            mock_token.assert_called_once_with("test-token-123")
-            mock_gh.assert_called_once_with(auth="auth-obj")
+    def test_uses_token_from_settings(self, monkeypatch):
+        _reset_settings()
+        monkeypatch.setenv("CLAYDE_GITHUB_TOKEN", "test-token-123")
+        with patch("clayde.config.Settings", side_effect=lambda **kw: Settings(_env_file=None)):
+            from clayde.config import get_github_client
+            with patch("clayde.config.Github") as mock_gh, \
+                 patch("clayde.config.Auth.Token") as mock_token:
+                mock_token.return_value = "auth-obj"
+                get_github_client()
+                mock_token.assert_called_once_with("test-token-123")
+                mock_gh.assert_called_once_with(auth="auth-obj")
+        _reset_settings()
 
 
 class TestSetupLogging:
     def test_creates_handler_and_configures_logger(self, tmp_path, monkeypatch):
+        _reset_settings()
+        monkeypatch.setenv("CLAYDE_DIR", str(tmp_path))
+        with patch("clayde.config.Settings", side_effect=lambda **kw: Settings(_env_file=None)):
+            setup_logging()
         log_file = str(tmp_path / "logs" / "agent.log")
-        monkeypatch.setattr(config, "LOG_FILE", log_file)
-        config.setup_logging()
         logger = logging.getLogger("clayde")
         assert logger.level == logging.INFO
         assert any(
             isinstance(h, logging.FileHandler) and h.baseFilename == log_file
             for h in logger.handlers
         )
-        # Clean up handler to avoid affecting other tests
         for h in logger.handlers[:]:
             if isinstance(h, logging.FileHandler) and h.baseFilename == log_file:
                 logger.removeHandler(h)
                 h.close()
+        _reset_settings()

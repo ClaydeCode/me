@@ -1,8 +1,7 @@
 """Tests for clayde.claude."""
 
-import os
-import subprocess
-from unittest.mock import MagicMock, mock_open, patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,6 +12,12 @@ from clayde.claude import (
     invoke_claude,
     is_claude_available,
 )
+
+
+def _mock_settings(dir_path):
+    s = MagicMock()
+    s.dir = Path(dir_path)
+    return s
 
 
 class TestIsLimitError:
@@ -61,8 +66,7 @@ class TestMakeEnv:
 
 
 class TestInvokeClaude:
-    def test_success(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("clayde.claude.CLAYDE_DIR", str(tmp_path))
+    def test_success(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity text")
 
         mock_result = MagicMock()
@@ -70,17 +74,17 @@ class TestInvokeClaude:
         mock_result.stdout = "plan output"
         mock_result.stderr = ""
 
-        with patch("clayde.claude.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result) as mock_run:
             result = invoke_claude("test prompt", "/some/repo")
 
         assert result == "plan output"
         mock_run.assert_called_once()
         args = mock_run.call_args
-        assert args[0][0][2] == "test prompt"  # -p argument
+        assert args[0][0][2] == "test prompt"
         assert args[1]["cwd"] == "/some/repo"
 
-    def test_nonzero_exit_without_limit(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("clayde.claude.CLAYDE_DIR", str(tmp_path))
+    def test_nonzero_exit_without_limit(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
 
         mock_result = MagicMock()
@@ -88,13 +92,13 @@ class TestInvokeClaude:
         mock_result.stdout = "partial output"
         mock_result.stderr = "some error"
 
-        with patch("clayde.claude.subprocess.run", return_value=mock_result):
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
             result = invoke_claude("prompt", "/repo")
 
         assert result == "partial output"
 
-    def test_nonzero_exit_with_limit_raises(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("clayde.claude.CLAYDE_DIR", str(tmp_path))
+    def test_nonzero_exit_with_limit_raises(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
 
         mock_result = MagicMock()
@@ -102,12 +106,12 @@ class TestInvokeClaude:
         mock_result.stdout = ""
         mock_result.stderr = "You have hit your usage limit"
 
-        with patch("clayde.claude.subprocess.run", return_value=mock_result):
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
             with pytest.raises(UsageLimitError):
                 invoke_claude("prompt", "/repo")
 
-    def test_exit_zero_with_limit_in_stdout_raises(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("clayde.claude.CLAYDE_DIR", str(tmp_path))
+    def test_exit_zero_with_limit_in_stdout_raises(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
 
         mock_result = MagicMock()
@@ -115,12 +119,12 @@ class TestInvokeClaude:
         mock_result.stdout = "Some output... you've reached the limit"
         mock_result.stderr = ""
 
-        with patch("clayde.claude.subprocess.run", return_value=mock_result):
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
             with pytest.raises(UsageLimitError):
                 invoke_claude("prompt", "/repo")
 
-    def test_returns_empty_string_on_none_stdout(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("clayde.claude.CLAYDE_DIR", str(tmp_path))
+    def test_returns_empty_string_on_none_stdout(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
 
         mock_result = MagicMock()
@@ -128,7 +132,8 @@ class TestInvokeClaude:
         mock_result.stdout = None
         mock_result.stderr = None
 
-        with patch("clayde.claude.subprocess.run", return_value=mock_result):
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
             result = invoke_claude("prompt", "/repo")
         assert result == ""
 

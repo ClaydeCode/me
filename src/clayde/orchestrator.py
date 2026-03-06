@@ -10,7 +10,7 @@ import os
 import sys
 
 from clayde.claude import is_claude_available
-from clayde.config import get_github_client, load_config, setup_logging
+from clayde.config import get_github_client, get_settings, setup_logging
 from clayde.github import get_assigned_issues
 from clayde.safety import is_issue_authorized, is_plan_approved
 from clayde.state import load_state, update_issue_state
@@ -63,12 +63,12 @@ def _handle_interrupted(url: str, entry: dict) -> None:
 
 
 def main():
-    config = load_config()
+    settings = get_settings()
 
-    if config.get("CLAYDE_ENABLED", "false").lower() != "true":
+    if not settings.enabled:
         sys.exit(0)
 
-    os.environ["GH_TOKEN"] = config["GITHUB_TOKEN"]
+    os.environ["GH_TOKEN"] = settings.github_token
 
     setup_logging()
 
