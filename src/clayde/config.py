@@ -13,7 +13,7 @@ _settings: "Settings | None" = None
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="CLAYDE_",
-        env_file=os.path.join(os.environ.get("CLAYDE_DIR", "/home/ubuntu/clayde"), "config.env"),
+        env_file=Path(os.environ.get("CLAYDE_DIR", "/home/ubuntu/clayde")) / "config.env",
         env_file_encoding="utf-8",
     )
 
@@ -28,16 +28,16 @@ class Settings(BaseSettings):
         return [u.strip() for u in self.whitelisted_users.split(",") if u.strip()]
 
     @property
-    def state_file(self) -> str:
-        return str(self.dir / "state.json")
+    def state_file(self) -> Path:
+        return self.dir / "state.json"
 
     @property
-    def log_file(self) -> str:
-        return str(self.dir / "logs" / "agent.log")
+    def log_file(self) -> Path:
+        return self.dir / "logs" / "agent.log"
 
     @property
-    def repos_dir(self) -> str:
-        return str(self.dir / "repos")
+    def repos_dir(self) -> Path:
+        return self.dir / "repos"
 
 
 def get_settings() -> Settings:
@@ -62,7 +62,7 @@ def get_github_client() -> "Github":
 def setup_logging() -> None:
     """Configure stdlib logging to append to the agent log file."""
     log_file = get_settings().log_file
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(log_file)
     handler.setFormatter(logging.Formatter(
         "[%(asctime)s] [%(name)s] %(message)s",

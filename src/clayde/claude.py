@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+from pathlib import Path
 
 from clayde.config import get_settings
 from clayde.telemetry import get_tracer
@@ -43,12 +44,12 @@ def invoke_claude(prompt, repo_path):
     """
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.invoke_claude") as span:
-        identity = open(os.path.join(str(get_settings().dir), "CLAUDE.md")).read()
+        identity = (get_settings().dir / "CLAUDE.md").read_text()
 
         try:
             result = subprocess.run(
                 [
-                    os.path.expanduser("~/.local/bin/claude"), "-p", prompt,
+                    str(Path.home() / ".local/bin/claude"), "-p", prompt,
                     "--append-system-prompt", identity,
                     "--dangerously-skip-permissions",
                 ],
@@ -101,7 +102,7 @@ def is_claude_available():
     with tracer.start_as_current_span("clayde.claude_available_check") as span:
         try:
             result = subprocess.run(
-                [os.path.expanduser("~/.local/bin/claude"), "-p", "respond with: OK"],
+                [str(Path.home() / ".local/bin/claude"), "-p", "respond with: OK"],
                 env=_make_env(),
                 text=True,
                 capture_output=True,

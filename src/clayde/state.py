@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 
 from opentelemetry import trace
 
@@ -13,15 +12,13 @@ log = logging.getLogger("clayde.state")
 
 def load_state():
     state_file = get_settings().state_file
-    if os.path.exists(state_file):
-        with open(state_file) as f:
-            return json.load(f)
+    if state_file.exists():
+        return json.loads(state_file.read_text())
     return {"issues": {}}
 
 
 def save_state(state):
-    with open(get_settings().state_file, "w") as f:
-        json.dump(state, f, indent=2)
+    get_settings().state_file.write_text(json.dumps(state, indent=2))
 
 
 def get_issue_state(issue_url):

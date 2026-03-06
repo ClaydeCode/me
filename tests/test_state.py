@@ -1,6 +1,7 @@
 """Tests for clayde.state."""
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import clayde.state as state_mod
@@ -8,7 +9,7 @@ import clayde.state as state_mod
 
 def _mock_settings(state_file):
     s = MagicMock()
-    s.state_file = state_file
+    s.state_file = Path(state_file)
     return s
 
 
