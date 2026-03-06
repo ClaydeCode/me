@@ -4,6 +4,8 @@ import json
 import logging
 import os
 
+from opentelemetry import trace
+
 from clayde.config import get_settings
 
 log = logging.getLogger("clayde.state")
@@ -29,5 +31,16 @@ def get_issue_state(issue_url):
 def update_issue_state(issue_url, updates):
     state = load_state()
     entry = state["issues"].setdefault(issue_url, {})
+    old_status = entry.get("status")
     entry.update(updates)
+    new_status = entry.get("status")
     save_state(state)
+
+    if old_status != new_status:
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.add_event("state_transition", attributes={
+                "issue.url": issue_url,
+                "old_status": old_status or "(none)",
+                "new_status": new_status or "(none)",
+            })

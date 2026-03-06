@@ -5,6 +5,7 @@ import os
 import subprocess
 
 from clayde.config import get_settings
+from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.claude")
 
@@ -40,35 +41,53 @@ def invoke_claude(prompt, repo_path):
 
     Raises UsageLimitError if the Claude CLI reports a usage/rate limit.
     """
-    identity = open(os.path.join(str(get_settings().dir), "CLAUDE.md")).read()
+    tracer = get_tracer()
+    with tracer.start_as_current_span("clayde.invoke_claude") as span:
+        identity = open(os.path.join(str(get_settings().dir), "CLAUDE.md")).read()
 
-    result = subprocess.run(
-        [
-            os.path.expanduser("~/.local/bin/claude"), "-p", prompt,
-            "--append-system-prompt", identity,
-            "--dangerously-skip-permissions",
-        ],
-        cwd=repo_path,
-        env=_make_env(),
-        text=True,
-        capture_output=True,
-        timeout=1800,
-    )
+        try:
+            result = subprocess.run(
+                [
+                    os.path.expanduser("~/.local/bin/claude"), "-p", prompt,
+                    "--append-system-prompt", identity,
+                    "--dangerously-skip-permissions",
+                ],
+                cwd=repo_path,
+                env=_make_env(),
+                text=True,
+                capture_output=True,
+                timeout=1800,
+            )
+        except subprocess.TimeoutExpired as e:
+            span.set_attribute("claude.timeout", True)
+            span.record_exception(e)
+            raise
 
-    combined = (result.stdout or "") + (result.stderr or "")
+        span.set_attribute("claude.timeout", False)
+        span.set_attribute("claude.exit_code", result.returncode)
+        span.set_attribute("claude.output_length", len(result.stdout or ""))
 
-    if result.returncode != 0:
-        log.error("Claude exited with code %d", result.returncode)
-        if result.stderr:
-            log.error("stderr: %s", result.stderr[:500])
-        if _is_limit_error(combined):
-            raise UsageLimitError("Claude usage limit hit")
+        combined = (result.stdout or "") + (result.stderr or "")
 
-    # Claude sometimes exits 0 but embeds a limit message in stdout
-    if _is_limit_error(result.stdout or ""):
-        raise UsageLimitError("Claude usage limit hit (exit 0 but limit message in stdout)")
+        if result.returncode != 0:
+            log.error("Claude exited with code %d", result.returncode)
+            if result.stderr:
+                log.error("stderr: %s", result.stderr[:500])
+            if _is_limit_error(combined):
+                span.set_attribute("claude.usage_limit", True)
+                exc = UsageLimitError("Claude usage limit hit")
+                span.record_exception(exc)
+                raise exc
 
-    return result.stdout or ""
+        # Claude sometimes exits 0 but embeds a limit message in stdout
+        if _is_limit_error(result.stdout or ""):
+            span.set_attribute("claude.usage_limit", True)
+            exc = UsageLimitError("Claude usage limit hit (exit 0 but limit message in stdout)")
+            span.record_exception(exc)
+            raise exc
+
+        span.set_attribute("claude.usage_limit", False)
+        return result.stdout or ""
 
 
 def is_claude_available():
@@ -78,20 +97,27 @@ def is_claude_available():
     detected. Any other error (CLI not found, unexpected failure) is treated
     as available so we don't suppress real work on spurious pre-check errors.
     """
-    try:
-        result = subprocess.run(
-            [os.path.expanduser("~/.local/bin/claude"), "-p", "respond with: OK"],
-            env=_make_env(),
-            text=True,
-            capture_output=True,
-            timeout=60,
-        )
-        combined = (result.stdout or "") + (result.stderr or "")
-        if result.returncode != 0 and _is_limit_error(combined):
-            return False
-        if _is_limit_error(result.stdout or ""):
-            return False
-        return True
-    except Exception as exc:
-        log.warning("Claude availability pre-check raised %s — assuming available", exc)
-        return True
+    tracer = get_tracer()
+    with tracer.start_as_current_span("clayde.claude_available_check") as span:
+        try:
+            result = subprocess.run(
+                [os.path.expanduser("~/.local/bin/claude"), "-p", "respond with: OK"],
+                env=_make_env(),
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+            combined = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0 and _is_limit_error(combined):
+                span.set_attribute("claude.available", False)
+                return False
+            if _is_limit_error(result.stdout or ""):
+                span.set_attribute("claude.available", False)
+                return False
+            span.set_attribute("claude.available", True)
+            return True
+        except Exception as exc:
+            log.warning("Claude availability pre-check raised %s — assuming available", exc)
+            span.set_attribute("claude.available", True)
+            span.set_attribute("claude.check_error", str(exc))
+            return True
