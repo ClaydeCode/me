@@ -15,6 +15,8 @@ _LIMIT_PATTERNS = [
     "claude code pro",
     "you've reached",
     "exceeded your",
+    "hit your limit",
+    "resets at",
 ]
 
 

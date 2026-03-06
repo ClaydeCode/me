@@ -48,6 +48,13 @@ def run(issue_url: str) -> None:
         update_issue_state(issue_url, {"status": "failed"})
         return
 
+    # Reject suspiciously short output that may be a rate limit message
+    if len(plan_text.strip()) < 200:
+        log.warning("Claude returned very short plan for issue #%d (%d chars) — treating as failed",
+                     number, len(plan_text.strip()))
+        update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "planning"})
+        return
+
     comment_id = _post_plan_comment(g, owner, repo, number, plan_text)
     update_issue_state(issue_url, {
         "status": "awaiting_approval",

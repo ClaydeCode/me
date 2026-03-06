@@ -63,9 +63,20 @@ def run(issue_url: str) -> None:
         return
 
     pr_url = _extract_pr_url(output)
-    _post_result(g, owner, repo, number, pr_url)
-    update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
-    log.info("Issue #%d done%s", number, f" — PR: {pr_url}" if pr_url else "")
+    if not pr_url:
+        # Check if a PR was created but not captured in output
+        pr_url = find_open_pr(g, owner, repo, number)
+    if pr_url:
+        _post_result(g, owner, repo, number, pr_url)
+        update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
+        log.info("Issue #%d done — PR: %s", number, pr_url)
+    else:
+        log.error("Implementation of #%d produced no PR", number)
+        post_comment(g, owner, repo, number,
+                     "Implementation ran but no PR was created. "
+                     "I'll retry on the next cycle.")
+        update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
+
 
 
 def _collect_discussion(all_comments, plan_comment_id: int) -> str:
@@ -104,12 +115,5 @@ def _extract_pr_url(output: str) -> str | None:
     return None
 
 
-def _post_result(g, owner: str, repo: str, number: int, pr_url: str | None) -> None:
-    if pr_url:
-        body = f"Implementation complete — PR opened: {pr_url}"
-    else:
-        body = (
-            "I attempted to implement the plan but could not confirm a PR was created. "
-            "Please check the repository for any branches or changes."
-        )
-    post_comment(g, owner, repo, number, body)
+def _post_result(g, owner: str, repo: str, number: int, pr_url: str) -> None:
+    post_comment(g, owner, repo, number, f"Implementation complete — PR opened: {pr_url}")
