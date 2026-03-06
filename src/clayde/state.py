@@ -4,20 +4,21 @@ import json
 import logging
 import os
 
-from clayde.config import STATE_FILE
+from clayde.config import get_settings
 
 log = logging.getLogger("clayde.state")
 
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
+    state_file = get_settings().state_file
+    if os.path.exists(state_file):
+        with open(state_file) as f:
             return json.load(f)
     return {"issues": {}}
 
 
 def save_state(state):
-    with open(STATE_FILE, "w") as f:
+    with open(get_settings().state_file, "w") as f:
         json.dump(state, f, indent=2)
 
 

@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 
-from clayde.config import CLAYDE_DIR
+from clayde.config import get_settings
 
 log = logging.getLogger("clayde.claude")
 
@@ -40,7 +40,7 @@ def invoke_claude(prompt, repo_path):
 
     Raises UsageLimitError if the Claude CLI reports a usage/rate limit.
     """
-    identity = open(os.path.join(CLAYDE_DIR, "CLAUDE.md")).read()
+    identity = open(os.path.join(str(get_settings().dir), "CLAUDE.md")).read()
 
     result = subprocess.run(
         [

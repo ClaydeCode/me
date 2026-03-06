@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 
-from clayde.config import REPOS_DIR
+from clayde.config import get_settings
 
 log = logging.getLogger("clayde.git")
 
@@ -14,7 +14,8 @@ def ensure_repo(owner: str, repo: str, default_branch: str) -> str:
 
     Returns the local path to the repository.
     """
-    repo_path = os.path.join(REPOS_DIR, f"{owner}__{repo}")
+    repos_dir = get_settings().repos_dir
+    repo_path = os.path.join(repos_dir, f"{owner}__{repo}")
     clone_url = f"https://github.com/{owner}/{repo}.git"
 
     if os.path.isdir(os.path.join(repo_path, ".git")):
@@ -26,7 +27,7 @@ def ensure_repo(owner: str, repo: str, default_branch: str) -> str:
         subprocess.run(["git", "pull"], cwd=repo_path, capture_output=True)
     else:
         log.info("Cloning %s/%s", owner, repo)
-        os.makedirs(REPOS_DIR, exist_ok=True)
+        os.makedirs(repos_dir, exist_ok=True)
         result = subprocess.run(
             ["git", "clone", clone_url, repo_path],
             capture_output=True, text=True,
