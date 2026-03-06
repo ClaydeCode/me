@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Sequence
 
 from opentelemetry import trace
@@ -12,8 +13,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, Sp
 
 log = logging.getLogger("clayde.telemetry")
 
-_TRACES_FILE = os.path.join(
-    os.environ.get("CLAYDE_DIR", "/home/ubuntu/clayde"), "logs", "traces.jsonl"
+_TRACES_FILE = str(
+    Path(os.environ.get("CLAYDE_DIR", "/home/ubuntu/clayde")) / "logs" / "traces.jsonl"
 )
 
 
@@ -21,8 +22,8 @@ class FileSpanExporter(SpanExporter):
     """Append spans as JSONL to a file."""
 
     def __init__(self, file_path: str):
-        self._file_path = file_path
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        self._file_path = Path(file_path)
+        self._file_path.parent.mkdir(parents=True, exist_ok=True)
 
     def export(self, spans: Sequence) -> SpanExportResult:
         try:

@@ -1,6 +1,7 @@
 """Tests for clayde.config."""
 
 import logging
+from pathlib import Path
 from unittest.mock import patch
 
 from clayde.config import Settings, _reset_settings, get_settings, setup_logging
@@ -44,9 +45,9 @@ class TestSettings:
     def test_derived_paths(self, monkeypatch):
         monkeypatch.setenv("CLAYDE_DIR", "/custom/dir")
         s = Settings(_env_file=None)
-        assert s.state_file == "/custom/dir/state.json"
-        assert s.log_file == "/custom/dir/logs/agent.log"
-        assert s.repos_dir == "/custom/dir/repos"
+        assert s.state_file == Path("/custom/dir/state.json")
+        assert s.log_file == Path("/custom/dir/logs/agent.log")
+        assert s.repos_dir == Path("/custom/dir/repos")
 
     def test_value_with_equals_sign(self, tmp_path, monkeypatch):
         env_file = tmp_path / "config.env"
