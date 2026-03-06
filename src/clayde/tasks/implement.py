@@ -10,6 +10,7 @@ from clayde.claude import UsageLimitError, invoke_claude
 from clayde.config import get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
+    extract_branch_name,
     fetch_comment,
     fetch_issue,
     fetch_issue_comments,
@@ -33,7 +34,8 @@ def run(issue_url: str) -> None:
 
     # If resuming from an interrupted implementation, check for an existing PR.
     if issue_state.get("status") == "interrupted":
-        existing_pr = find_open_pr(g, owner, repo, number)
+        branch_name = issue_state.get("branch_name", f"clayde/issue-{number}")
+        existing_pr = find_open_pr(g, owner, repo, branch_name)
         if existing_pr:
             log.info("Resuming interrupted #%d — found existing PR %s", number, existing_pr)
             post_comment(g, owner, repo, number, f"Implementation complete — PR opened: {existing_pr}")
@@ -49,10 +51,13 @@ def run(issue_url: str) -> None:
     plan_comment = fetch_comment(g, owner, repo, number, plan_comment_id)
     plan_text = plan_comment.body
 
+    branch_name = issue_state.get("branch_name") or extract_branch_name(plan_text, number)
+    update_issue_state(issue_url, {"branch_name": branch_name})
+
     all_comments = fetch_issue_comments(g, owner, repo, number)
     discussion_text = _collect_discussion(all_comments, plan_comment_id)
 
-    prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path)
+    prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
 
     log.info("Invoking Claude for implementation of issue #%d", number)
     try:
@@ -91,7 +96,7 @@ def _collect_discussion(all_comments, plan_comment_id: int) -> str:
     return "\n---\n".join(discussion) or "(none)"
 
 
-def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo: str, number: int, repo_path: str) -> str:
+def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo: str, number: int, repo_path: str, branch_name: str) -> str:
     template_src = (_PROMPTS_DIR / "implement.j2").read_text()
     return Environment(undefined=StrictUndefined).from_string(template_src).render(
         number=number,
@@ -102,6 +107,7 @@ def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo:
         plan_text=plan_text,
         discussion_text=discussion_text,
         repo_path=repo_path,
+        branch_name=branch_name,
     )
 
 

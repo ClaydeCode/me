@@ -55,7 +55,8 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
                           #   update_issue_state()
     github.py             # PyGitHub wrappers: parse_issue_url(), fetch_issue(),
                           #   fetch_issue_comments(), post_comment(), fetch_comment(),
-                          #   get_default_branch(), get_assigned_issues(), find_open_pr()
+                          #   get_default_branch(), get_assigned_issues(),
+                          #   extract_branch_name(), find_open_pr()
     git.py                # ensure_repo() — clone or update repos under REPOS_DIR
     safety.py             # is_issue_authorized(), is_plan_approved() — safety gates
     claude.py             # invoke_claude(prompt, repo_path) — subprocess to claude CLI
@@ -101,7 +102,7 @@ Issue lifecycle stored in `state.json` under `{"issues": {"<html_url>": {...}}}`
 | `failed` | Error during plan or implement; cleared manually to retry |
 | `interrupted` | Claude usage/rate limit hit mid-task; retried automatically each cron tick |
 
-State entries also store: `owner`, `repo`, `number`, `plan_comment_id`, `pr_url`.
+State entries also store: `owner`, `repo`, `number`, `plan_comment_id`, `pr_url`, `branch_name`.
 Interrupted entries also store: `interrupted_phase` (`"planning"` or `"implementing"`).
 
 ---
@@ -163,7 +164,7 @@ Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 1. Fetch plan comment text and any discussion comments posted after the plan
 2. `ensure_repo()` to reset to latest default branch
 3. Build prompt with issue body, plan, discussion, repo path
-4. `invoke_claude()` — Claude creates a branch (`clayde/issue-{number}`), implements, commits, pushes, opens PR, outputs PR URL as last line
+4. `invoke_claude()` — Claude creates a branch (`clayde/issue-{number}-{slug}`, where the slug is extracted from the plan), implements, commits, pushes, opens PR, outputs PR URL as last line
 5. Parse PR URL from last line of Claude output via regex
 6. Post result comment on issue; set status → `done`
 
