@@ -20,6 +20,7 @@ from clayde.github import (
     post_comment,
 )
 from clayde.state import get_issue_state, update_issue_state
+from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.implement")
 
@@ -27,60 +28,74 @@ _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 def run(issue_url: str) -> None:
-    g = get_github_client()
-    owner, repo, number = parse_issue_url(issue_url)
-    issue_state = get_issue_state(issue_url)
-    plan_comment_id = issue_state["plan_comment_id"]
+    tracer = get_tracer()
+    with tracer.start_as_current_span("clayde.task.implement") as span:
+        g = get_github_client()
+        owner, repo, number = parse_issue_url(issue_url)
+        issue_state = get_issue_state(issue_url)
+        plan_comment_id = issue_state["plan_comment_id"]
+        span.set_attribute("issue.number", number)
+        span.set_attribute("issue.owner", owner)
+        span.set_attribute("issue.repo", repo)
 
-    # If resuming from an interrupted implementation, check for an existing PR.
-    if issue_state.get("status") == "interrupted":
-        branch_name = issue_state.get("branch_name", f"clayde/issue-{number}")
-        existing_pr = find_open_pr(g, owner, repo, branch_name)
-        if existing_pr:
-            log.info("Resuming interrupted #%d — found existing PR %s", number, existing_pr)
-            post_comment(g, owner, repo, number, f"Implementation complete — PR opened: {existing_pr}")
-            update_issue_state(issue_url, {"status": "done", "pr_url": existing_pr})
+        resumed = issue_state.get("status") == "interrupted"
+        span.set_attribute("implement.resumed_from_interrupted", resumed)
+
+        # If resuming from an interrupted implementation, check for an existing PR.
+        if resumed:
+            branch_name = issue_state.get("branch_name", f"clayde/issue-{number}")
+            existing_pr = find_open_pr(g, owner, repo, branch_name)
+            if existing_pr:
+                log.info("Resuming interrupted #%d — found existing PR %s", number, existing_pr)
+                post_comment(g, owner, repo, number, f"Implementation complete — PR opened: {existing_pr}")
+                update_issue_state(issue_url, {"status": "done", "pr_url": existing_pr})
+                span.set_attribute("implement.status", "done")
+                span.set_attribute("implement.pr_url", existing_pr)
+                return
+
+        update_issue_state(issue_url, {"status": "implementing"})
+
+        issue = fetch_issue(g, owner, repo, number)
+        default_branch = get_default_branch(g, owner, repo)
+        repo_path = ensure_repo(owner, repo, default_branch)
+
+        plan_comment = fetch_comment(g, owner, repo, number, plan_comment_id)
+        plan_text = plan_comment.body
+
+        branch_name = issue_state.get("branch_name") or extract_branch_name(plan_text, number)
+        update_issue_state(issue_url, {"branch_name": branch_name})
+
+        all_comments = fetch_issue_comments(g, owner, repo, number)
+        discussion_text = _collect_discussion(all_comments, plan_comment_id)
+
+        prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
+
+        log.info("Invoking Claude for implementation of issue #%d", number)
+        try:
+            output = invoke_claude(prompt, repo_path)
+        except UsageLimitError:
+            log.warning("Usage limit hit during implementation #%d — will retry next cycle", number)
+            span.set_attribute("implement.status", "limit")
+            update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
             return
 
-    update_issue_state(issue_url, {"status": "implementing"})
-
-    issue = fetch_issue(g, owner, repo, number)
-    default_branch = get_default_branch(g, owner, repo)
-    repo_path = ensure_repo(owner, repo, default_branch)
-
-    plan_comment = fetch_comment(g, owner, repo, number, plan_comment_id)
-    plan_text = plan_comment.body
-
-    branch_name = issue_state.get("branch_name") or extract_branch_name(plan_text, number)
-    update_issue_state(issue_url, {"branch_name": branch_name})
-
-    all_comments = fetch_issue_comments(g, owner, repo, number)
-    discussion_text = _collect_discussion(all_comments, plan_comment_id)
-
-    prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
-
-    log.info("Invoking Claude for implementation of issue #%d", number)
-    try:
-        output = invoke_claude(prompt, repo_path)
-    except UsageLimitError:
-        log.warning("Usage limit hit during implementation #%d — will retry next cycle", number)
-        update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
-        return
-
-    pr_url = _extract_pr_url(output)
-    if not pr_url:
-        # Check if a PR was created but not captured in output
-        pr_url = find_open_pr(g, owner, repo, number)
-    if pr_url:
-        _post_result(g, owner, repo, number, pr_url)
-        update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
-        log.info("Issue #%d done — PR: %s", number, pr_url)
-    else:
-        log.error("Implementation of #%d produced no PR", number)
-        post_comment(g, owner, repo, number,
-                     "Implementation ran but no PR was created. "
-                     "I'll retry on the next cycle.")
-        update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
+        pr_url = _extract_pr_url(output)
+        if not pr_url:
+            # Check if a PR was created but not captured in output
+            pr_url = find_open_pr(g, owner, repo, number)
+        if pr_url:
+            _post_result(g, owner, repo, number, pr_url)
+            update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
+            span.set_attribute("implement.status", "done")
+            span.set_attribute("implement.pr_url", pr_url)
+            log.info("Issue #%d done — PR: %s", number, pr_url)
+        else:
+            log.error("Implementation of #%d produced no PR", number)
+            post_comment(g, owner, repo, number,
+                         "Implementation ran but no PR was created. "
+                         "I'll retry on the next cycle.")
+            span.set_attribute("implement.status", "no_pr")
+            update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
 
 
 
