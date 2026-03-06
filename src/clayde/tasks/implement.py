@@ -82,7 +82,7 @@ def run(issue_url: str) -> None:
         pr_url = _extract_pr_url(output)
         if not pr_url:
             # Check if a PR was created but not captured in output
-            pr_url = find_open_pr(g, owner, repo, number)
+            pr_url = find_open_pr(g, owner, repo, branch_name)
         if pr_url:
             _post_result(g, owner, repo, number, pr_url)
             update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
@@ -91,11 +91,23 @@ def run(issue_url: str) -> None:
             log.info("Issue #%d done — PR: %s", number, pr_url)
         else:
             log.error("Implementation of #%d produced no PR", number)
-            post_comment(g, owner, repo, number,
-                         "Implementation ran but no PR was created. "
-                         "I'll retry on the next cycle.")
-            span.set_attribute("implement.status", "no_pr")
-            update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
+            log.error("Claude output (last 2000 chars): %s", (output or "")[-2000:])
+            retry_count = issue_state.get("retry_count", 0) + 1
+            if retry_count >= 3:
+                log.error("Issue #%d failed after %d retries — giving up", number, retry_count)
+                post_comment(g, owner, repo, number,
+                             "Implementation failed to produce a PR after multiple retries. "
+                             "Marking as failed — manual intervention needed.")
+                span.set_attribute("implement.status", "failed")
+                update_issue_state(issue_url, {"status": "failed", "retry_count": retry_count})
+            else:
+                post_comment(g, owner, repo, number,
+                             f"Implementation ran but no PR was created (attempt {retry_count}/3). "
+                             "I'll retry on the next cycle.")
+                span.set_attribute("implement.status", "no_pr")
+                span.set_attribute("implement.retry_count", retry_count)
+                update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing",
+                                               "retry_count": retry_count})
 
 
 
