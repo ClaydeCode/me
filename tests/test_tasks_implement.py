@@ -139,10 +139,11 @@ class TestRun:
         issue.title = "Test issue"
         issue.body = "Fix this bug"
 
-        prompt = _build_prompt(issue, "plan text", "discussion", "owner", "repo", 42, "/tmp/repo")
+        prompt = _build_prompt(issue, "plan text", "discussion", "owner", "repo", 42, "/tmp/repo", "clayde/issue-42-test-branch")
         assert "Test issue" in prompt
         assert "Fix this bug" in prompt
         assert "plan text" in prompt
         assert "discussion" in prompt
         assert "/tmp/repo" in prompt
         assert "42" in prompt
+        assert "clayde/issue-42-test-branch" in prompt

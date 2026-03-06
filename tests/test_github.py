@@ -6,6 +6,7 @@ import pytest
 from github import GithubException
 
 from clayde.github import (
+    extract_branch_name,
     fetch_comment,
     fetch_issue,
     fetch_issue_comments,
@@ -96,19 +97,33 @@ class TestGetAssignedIssues:
         assert result == []
 
 
+class TestExtractBranchName:
+    def test_extracts_from_plan(self):
+        plan = "Some plan text\n\n**Branch:** `clayde/issue-13-better-branch`\n"
+        assert extract_branch_name(plan, 13) == "clayde/issue-13-better-branch"
+
+    def test_fallback_when_missing(self):
+        plan = "Some plan text without branch name"
+        assert extract_branch_name(plan, 7) == "clayde/issue-7"
+
+    def test_extracts_with_surrounding_text(self):
+        plan = "Plan\n**Branch:** `clayde/issue-5-fix-bug`\nMore text"
+        assert extract_branch_name(plan, 5) == "clayde/issue-5-fix-bug"
+
+
 class TestFindOpenPr:
     def test_returns_url_when_pr_exists(self):
         g = MagicMock()
         mock_pr = MagicMock()
         mock_pr.html_url = "https://github.com/alice/repo/pull/10"
         g.get_repo.return_value.get_pulls.return_value = [mock_pr]
-        result = find_open_pr(g, "alice", "repo", 5)
+        result = find_open_pr(g, "alice", "repo", "clayde/issue-5-fix-bug")
         g.get_repo.return_value.get_pulls.assert_called_once_with(
-            state="open", head="alice:clayde/issue-5"
+            state="open", head="alice:clayde/issue-5-fix-bug"
         )
         assert result == "https://github.com/alice/repo/pull/10"
 
     def test_returns_none_when_no_pr(self):
         g = MagicMock()
         g.get_repo.return_value.get_pulls.return_value = []
-        assert find_open_pr(g, "alice", "repo", 5) is None
+        assert find_open_pr(g, "alice", "repo", "clayde/issue-5-fix-bug") is None

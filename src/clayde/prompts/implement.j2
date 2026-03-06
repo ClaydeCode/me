@@ -14,14 +14,14 @@ ADDITIONAL COMMENTS/INSTRUCTIONS FROM DISCUSSION:
 REPOSITORY ON DISK: {{ repo_path }}
 
 Steps:
-1. Before creating a branch or PR, check whether branch `clayde/issue-{{ number }}` or a PR for this issue already exists. If so, resume from the existing state rather than starting fresh.
-2. Create or switch to branch: git checkout -b clayde/issue-{{ number }} (or git checkout clayde/issue-{{ number }} if it exists)
+1. Before creating a branch or PR, check whether branch `{{ branch_name }}` or a PR for this issue already exists. If so, resume from the existing state rather than starting fresh.
+2. Create or switch to branch: git checkout -b {{ branch_name }} (or git checkout {{ branch_name }} if it exists)
 3. Implement the plan carefully, following existing code style and paying attention to agents.md files if they exist
 4. Write or update tests if applicable
 5. Run tests if a test command is discoverable (check CLAUDE.md, README, Makefile, package.json, pyproject.toml, justfile)
 6. Review your own changes for correctness, edge cases, and style and run "just cleanup" if it exists before committing
 7. Commit with a clear message, e.g.: "Fix #{{ number }}: <summary>"
-8. Push: git push origin clayde/issue-{{ number }}
+8. Push: git push origin {{ branch_name }}
 9. Create PR (if one doesn't already exist): gh pr create --repo {{ owner }}/{{ repo }} --title "..." --body "Closes #{{ number }}\n\n<description>"
 
 Output the PR URL as the LAST line of your response.
