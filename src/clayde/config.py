@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 from github import Auth, Github
-from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _settings: "Settings | None" = None
@@ -21,13 +20,12 @@ class Settings(BaseSettings):
     github_token: str = ""
     github_username: str = "ClaydeCode"
     enabled: bool = False
-    whitelisted_users_raw: str = "max-tet,ClaydeCode"
+    whitelisted_users: str = "max-tet,ClaydeCode"
     dir: Path = Path("/home/ubuntu/clayde")
 
-    @computed_field
     @property
-    def whitelisted_users(self) -> list[str]:
-        return [u.strip() for u in self.whitelisted_users_raw.split(",") if u.strip()]
+    def whitelisted_users_list(self) -> list[str]:
+        return [u.strip() for u in self.whitelisted_users.split(",") if u.strip()]
 
     @property
     def state_file(self) -> str:

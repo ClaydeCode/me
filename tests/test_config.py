@@ -10,22 +10,22 @@ class TestSettings:
     def test_loads_from_env_vars(self, monkeypatch):
         monkeypatch.setenv("CLAYDE_GITHUB_TOKEN", "tok123")
         monkeypatch.setenv("CLAYDE_ENABLED", "true")
-        monkeypatch.setenv("CLAYDE_WHITELISTED_USERS_RAW", "alice,bob")
+        monkeypatch.setenv("CLAYDE_WHITELISTED_USERS", "alice,bob")
         s = Settings(_env_file=None)
         assert s.github_token == "tok123"
         assert s.enabled is True
-        assert s.whitelisted_users == ["alice", "bob"]
+        assert s.whitelisted_users_list == ["alice", "bob"]
 
     def test_defaults(self, monkeypatch):
         monkeypatch.delenv("CLAYDE_GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("CLAYDE_ENABLED", raising=False)
-        monkeypatch.delenv("CLAYDE_WHITELISTED_USERS_RAW", raising=False)
+        monkeypatch.delenv("CLAYDE_WHITELISTED_USERS", raising=False)
         monkeypatch.delenv("CLAYDE_DIR", raising=False)
         s = Settings(_env_file=None)
         assert s.github_token == ""
         assert s.enabled is False
         assert s.github_username == "ClaydeCode"
-        assert s.whitelisted_users == ["max-tet", "ClaydeCode"]
+        assert s.whitelisted_users_list == ["max-tet", "ClaydeCode"]
 
     def test_loads_from_env_file(self, tmp_path, monkeypatch):
         env_file = tmp_path / "config.env"
@@ -37,9 +37,9 @@ class TestSettings:
         assert s.enabled is True
 
     def test_comma_separated_whitelisted_users(self, monkeypatch):
-        monkeypatch.setenv("CLAYDE_WHITELISTED_USERS_RAW", "alice, bob , charlie")
+        monkeypatch.setenv("CLAYDE_WHITELISTED_USERS", "alice, bob , charlie")
         s = Settings(_env_file=None)
-        assert s.whitelisted_users == ["alice", "bob", "charlie"]
+        assert s.whitelisted_users_list == ["alice", "bob", "charlie"]
 
     def test_derived_paths(self, monkeypatch):
         monkeypatch.setenv("CLAYDE_DIR", "/custom/dir")

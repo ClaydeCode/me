@@ -14,7 +14,7 @@ def _make_reaction(content, login):
 
 def _mock_settings(users):
     s = MagicMock()
-    s.whitelisted_users = users
+    s.whitelisted_users_list = users
     return s
 
 
