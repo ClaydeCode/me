@@ -70,11 +70,12 @@ class TestPostResult:
         body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
         assert "https://github.com/o/r/pull/5" in body
 
-    def test_posts_without_pr_url(self):
+    def test_posts_pr_url(self):
         g = MagicMock()
-        _post_result(g, "o", "r", 1, None)
+        _post_result(g, "o", "r", 1, "https://github.com/o/r/pull/7")
         body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
-        assert "could not confirm" in body
+        assert "https://github.com/o/r/pull/7" in body
+        assert "complete" in body.lower()
 
 
 class TestRun:
@@ -130,6 +131,27 @@ class TestRun:
             mock_claude.assert_not_called()
 
         mock_update.assert_called_once_with("url", {"status": "done", "pr_url": "https://github.com/o/r/pull/5"})
+
+    def test_no_pr_url_sets_interrupted(self):
+        with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
+             patch("clayde.tasks.implement.update_issue_state") as mock_update, \
+             patch("clayde.tasks.implement.fetch_issue"), \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value="no url here"), \
+             patch("clayde.tasks.implement.find_open_pr", return_value=None), \
+             patch("clayde.tasks.implement.post_comment"):
+            mock_fc.return_value.body = "plan text"
+            run("https://github.com/o/r/issues/1")
+
+        last_call = mock_update.call_args_list[-1]
+        assert last_call[0][1]["status"] == "interrupted"
+        assert last_call[0][1]["interrupted_phase"] == "implementing"
 
     def test_build_prompt_uses_real_template(self):
         """Test that _build_prompt renders with the real Jinja2 template."""

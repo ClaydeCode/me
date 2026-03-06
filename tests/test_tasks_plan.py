@@ -76,7 +76,7 @@ class TestRun:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value="plan text"), \
+             patch("clayde.tasks.plan.invoke_claude", return_value="x" * 250), \
              patch("clayde.tasks.plan._post_plan_comment", return_value=999):
             run("https://github.com/o/r/issues/1")
 
