@@ -27,8 +27,7 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 - **Entry point:** `clayde.orchestrator:main` (console script `clayde`)
 - **Cron:** every 5 min → `cd /home/ubuntu/clayde && uv run clayde 2>> logs/agent.log`
 - **Claude CLI:** `~/.local/bin/claude` (Claude Code Pro, no separate API key)
-- **gh CLI:** v2.46.0, authenticated as ClaydeCode via `~/.config/gh/hosts.yml`
-- **Git credential helper:** `gh auth git-credential`
+- **Git credential helper:** `/home/ubuntu/clayde/git-credential-clayde.sh` (reads PAT from `config.env`)
 - **Git identity:** `user.name = Clayde`, `user.email = clayde@vtettenborn.net`
 
 ---
@@ -41,6 +40,7 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
   config.env              # GITHUB_TOKEN, GITHUB_USERNAME, CLAYDE_ENABLED
   state.json              # persisted issue state (keyed by issue HTML URL)
   CLAUDE.md               # this file — identity + project context
+  git-credential-clayde.sh # git credential helper (reads PAT from config.env)
   gh-issue.md             # slash-command prompt for interactive issue work
   uv.lock
   logs/
@@ -164,8 +164,8 @@ Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 1. Fetch plan comment text and any discussion comments posted after the plan
 2. `ensure_repo()` to reset to latest default branch
 3. Build prompt with issue body, plan, discussion, repo path
-4. `invoke_claude()` — Claude creates a branch (`clayde/issue-{number}-{slug}`, where the slug is extracted from the plan), implements, commits, pushes, opens PR, outputs PR URL as last line
-5. Parse PR URL from last line of Claude output via regex
+4. `invoke_claude()` — Claude creates a branch (`clayde/issue-{number}-{slug}`, where the slug is extracted from the plan), implements, commits, and pushes
+5. Python code creates PR via PyGitHub (`create_pull_request()`) or finds an existing one
 6. Post result comment on issue; set status → `done`
 
 ---

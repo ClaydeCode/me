@@ -6,6 +6,7 @@ import pytest
 from github import GithubException
 
 from clayde.github import (
+    create_pull_request,
     extract_branch_name,
     fetch_comment,
     fetch_issue,
@@ -127,3 +128,21 @@ class TestFindOpenPr:
         g = MagicMock()
         g.get_repo.return_value.get_pulls.return_value = []
         assert find_open_pr(g, "alice", "repo", "clayde/issue-5-fix-bug") is None
+
+
+class TestCreatePullRequest:
+    def test_creates_pr_and_returns_url(self):
+        g = MagicMock()
+        mock_pr = MagicMock()
+        mock_pr.html_url = "https://github.com/alice/repo/pull/11"
+        g.get_repo.return_value.create_pull.return_value = mock_pr
+        result = create_pull_request(
+            g, "alice", "repo",
+            title="Fix #5: bug", body="Closes #5",
+            head="clayde/issue-5", base="main",
+        )
+        g.get_repo.return_value.create_pull.assert_called_once_with(
+            title="Fix #5: bug", body="Closes #5",
+            head="clayde/issue-5", base="main",
+        )
+        assert result == "https://github.com/alice/repo/pull/11"

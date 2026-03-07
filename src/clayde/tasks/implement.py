@@ -1,7 +1,6 @@
 """Implement task — implement the approved plan, open PR, post result."""
 
 import logging
-import re
 from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
@@ -10,6 +9,7 @@ from clayde.claude import UsageLimitError, invoke_claude
 from clayde.config import get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
+    create_pull_request,
     extract_branch_name,
     fetch_comment,
     fetch_issue,
@@ -79,10 +79,23 @@ def run(issue_url: str) -> None:
             update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
             return
 
-        pr_url = _extract_pr_url(output)
+        # Check for existing PR first (e.g. from a previous interrupted run)
+        pr_url = find_open_pr(g, owner, repo, branch_name)
         if not pr_url:
-            # Check if a PR was created but not captured in output
-            pr_url = find_open_pr(g, owner, repo, branch_name)
+            # Try to create a new PR
+            try:
+                issue_obj = fetch_issue(g, owner, repo, number)
+                pr_url = create_pull_request(
+                    g, owner, repo,
+                    title=f"Fix #{number}: {issue_obj.title}",
+                    body=f"Closes #{number}",
+                    head=branch_name,
+                    base=default_branch,
+                )
+                log.info("Created PR: %s", pr_url)
+            except Exception as e:
+                log.error("Failed to create PR for #%d: %s", number, e)
+
         if pr_url:
             _post_result(g, owner, repo, number, pr_url)
             update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
@@ -136,16 +149,6 @@ def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo:
         repo_path=repo_path,
         branch_name=branch_name,
     )
-
-
-def _extract_pr_url(output: str) -> str | None:
-    if not output:
-        return None
-    for line in reversed(output.strip().splitlines()):
-        m = re.search(r"https://github\.com/\S+/pull/\d+", line)
-        if m:
-            return m.group(0)
-    return None
 
 
 def _post_result(g, owner: str, repo: str, number: int, pr_url: str) -> None:

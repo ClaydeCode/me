@@ -60,3 +60,14 @@ def find_open_pr(g: Github, owner: str, repo: str, branch_name: str) -> str | No
         state="open", head=f"{owner}:{branch_name}"
     ))
     return pulls[0].html_url if pulls else None
+
+
+def create_pull_request(
+    g: Github, owner: str, repo: str, *,
+    title: str, body: str, head: str, base: str,
+) -> str:
+    """Create a pull request and return its HTML URL."""
+    pr = g.get_repo(f"{owner}/{repo}").create_pull(
+        title=title, body=body, head=head, base=base,
+    )
+    return pr.html_url
