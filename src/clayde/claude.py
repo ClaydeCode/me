@@ -10,6 +10,8 @@ from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.claude")
 
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
+
 _LIMIT_PATTERNS = [
     "usage limit",
     "rate limit",
@@ -49,7 +51,7 @@ def invoke_claude(prompt, repo_path):
         try:
             result = subprocess.run(
                 [
-                    str(Path.home() / ".local/bin/claude"), "-p", prompt,
+                    CLAUDE_BIN, "-p", prompt,
                     "--append-system-prompt", identity,
                     "--dangerously-skip-permissions",
                 ],
@@ -102,7 +104,7 @@ def is_claude_available():
     with tracer.start_as_current_span("clayde.claude_available_check") as span:
         try:
             result = subprocess.run(
-                [str(Path.home() / ".local/bin/claude"), "-p", "respond with: OK"],
+                [CLAUDE_BIN, "-p", "respond with: OK"],
                 env=_make_env(),
                 text=True,
                 capture_output=True,

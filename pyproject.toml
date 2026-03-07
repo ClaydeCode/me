@@ -16,7 +16,8 @@ dependencies = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-clayde = "clayde.orchestrator:main"
+clayde = "clayde.orchestrator:run_loop"
+clayde-once = "clayde.orchestrator:main"
 
 [build-system]
 requires = ["hatchling"]

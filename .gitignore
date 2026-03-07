@@ -16,5 +16,8 @@ dist/
 # Claude local config
 .claude/settings.local.json
 
+# Docker
+docker-compose.override.yml
+
 # IDE
 .idea
