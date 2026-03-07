@@ -1,13 +1,18 @@
-"""Clayde orchestrator — entry point called by cron every 15 minutes.
+"""Clayde orchestrator — manages the issue lifecycle state machine.
 
-Manages the issue lifecycle as a state machine:
   new → planning → awaiting_approval → implementing → done
                                      ↘ interrupted (usage limit) → (retry)
+
+Entry points:
+  main()      — single cycle (one-shot mode, used for testing/debugging)
+  run_loop()  — continuous loop with configurable sleep interval (container mode)
 """
 
 import logging
 import os
+import signal
 import sys
+import time
 
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
@@ -21,6 +26,8 @@ from clayde.tasks import implement, plan
 from clayde.telemetry import get_tracer, init_tracer
 
 log = logging.getLogger("clayde.orchestrator")
+
+_shutdown = False
 
 
 def _handle_new_issue(g, issue, url: str) -> None:
@@ -147,3 +154,34 @@ def main():
         tick_span.set_attribute("issues.processed", processed)
 
     provider.force_flush()
+
+
+def _handle_signal(signum, frame):
+    global _shutdown
+    _shutdown = True
+    log.info("Received signal %s — will shut down after current cycle", signum)
+
+
+def run_loop():
+    """Run main() in a loop with a configurable sleep interval.
+
+    This is the container entry point. Handles SIGTERM/SIGINT for graceful
+    shutdown and guarantees no overlapping work sessions.
+    """
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    interval = int(os.environ.get("CLAYDE_INTERVAL", "300"))
+
+    setup_logging()
+    log.info("Starting Clayde loop (interval=%ds)", interval)
+
+    while not _shutdown:
+        try:
+            main()
+        except SystemExit:
+            pass  # main() calls sys.exit(0) when disabled
+        except Exception:
+            log.exception("Unhandled error in main loop")
+        if not _shutdown:
+            time.sleep(interval)
