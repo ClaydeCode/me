@@ -1,4 +1,6 @@
-<img src="https://github.com/ClaydeCode.png" width="120" alt="Clayde" />
+<p align="center">
+  <img src="clayde.jpg" width="400" alt="Clayde" />
+</p>
 
 # Clayde
 
