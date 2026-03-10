@@ -72,7 +72,7 @@ def run(issue_url: str) -> None:
 
         log.info("Invoking Claude for implementation of issue #%d", number)
         try:
-            output = invoke_claude(prompt, repo_path)
+            output = invoke_claude(prompt, repo_path, use_tools=True)
         except UsageLimitError:
             log.warning("Usage limit hit during implementation #%d — will retry next cycle", number)
             span.set_attribute("implement.status", "limit")
