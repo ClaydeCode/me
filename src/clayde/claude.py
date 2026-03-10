@@ -116,15 +116,15 @@ def _execute_tool(block, cwd: str) -> str:
         return f"[error: unknown tool: {block.name}]"
 
 
-def invoke_claude(prompt: str, repo_path: str, use_tools: bool = False) -> str:
+def invoke_claude(prompt: str, repo_path: str) -> str:
     """Invoke the Claude API with the given prompt.
+
+    Uses tool-use mode (bash + str_replace_editor) so Claude can explore and
+    modify the repository.
 
     Args:
         prompt: The user prompt to send to Claude.
         repo_path: Path to the repository (used as cwd for tool execution).
-        use_tools: If True, use tool-use mode (bash + str_replace_editor) for
-                   implementation tasks. If False, use plain text-only mode for
-                   planning tasks.
 
     Raises:
         UsageLimitError: When the Claude API reports a rate/usage limit.
@@ -137,87 +137,69 @@ def invoke_claude(prompt: str, repo_path: str, use_tools: bool = False) -> str:
         client = _get_client()
 
         span.set_attribute("claude.model", model)
-        span.set_attribute("claude.use_tools", use_tools)
 
         total_input_tokens = 0
         total_output_tokens = 0
 
         try:
-            if not use_tools:
-                # Text-only mode for planning
-                response = client.messages.create(
+            tools = [
+                {"type": "bash_20241022", "name": "bash"},
+                {"type": "str_replace_editor_20241022", "name": "str_replace_editor"},
+            ]
+            messages = [{"role": "user", "content": prompt}]
+            deadline = time.monotonic() + 1800
+            turn_count = 0
+            output = ""
+
+            while time.monotonic() < deadline:
+                response = client.beta.messages.create(
                     model=model,
                     max_tokens=8192,
                     system=identity,
-                    messages=[{"role": "user", "content": prompt}],
+                    tools=tools,
+                    messages=messages,
+                    betas=["computer-use-2024-10-22"],
                 )
-                total_input_tokens = response.usage.input_tokens
-                total_output_tokens = response.usage.output_tokens
-                output = response.content[0].text if response.content else ""
+                turn_count += 1
 
-                # Capture rate-limit headroom from response headers
-                _set_ratelimit_attributes(span, response)
+                # Accumulate token usage across turns
+                total_input_tokens += response.usage.input_tokens
+                total_output_tokens += response.usage.output_tokens
 
-            else:
-                # Tool-use mode for implementation
-                tools = [
-                    {"type": "bash_20241022", "name": "bash"},
-                    {"type": "str_replace_editor_20241022", "name": "str_replace_editor"},
-                ]
-                messages = [{"role": "user", "content": prompt}]
-                deadline = time.monotonic() + 1800
-                turn_count = 0
-                output = ""
+                messages.append({"role": "assistant", "content": response.content})
 
-                while time.monotonic() < deadline:
-                    response = client.beta.messages.create(
-                        model=model,
-                        max_tokens=8192,
-                        system=identity,
-                        tools=tools,
-                        messages=messages,
-                        betas=["computer-use-2024-10-22"],
+                if response.stop_reason == "end_turn":
+                    output = "".join(
+                        b.text for b in response.content if hasattr(b, "text")
                     )
-                    turn_count += 1
+                    _set_ratelimit_attributes(span, response)
+                    break
 
-                    # Accumulate token usage across turns
-                    total_input_tokens += response.usage.input_tokens
-                    total_output_tokens += response.usage.output_tokens
+                # Execute tool calls and feed results back
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = _execute_tool(block, cwd=repo_path)
+                        log.info("Tool %s executed (output: %d chars)", block.name, len(result))
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
 
-                    messages.append({"role": "assistant", "content": response.content})
+                if not tool_results:
+                    # No tool calls and stop reason isn't end_turn — break to avoid infinite loop
+                    log.warning("No tool calls and stop_reason=%s — breaking loop", response.stop_reason)
+                    break
 
-                    if response.stop_reason == "end_turn":
-                        output = "".join(
-                            b.text for b in response.content if hasattr(b, "text")
-                        )
-                        _set_ratelimit_attributes(span, response)
-                        break
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                span.set_attribute("claude.timeout", True)
+                exc = TimeoutError("Claude tool loop exceeded 1800s")
+                span.record_exception(exc)
+                raise exc
 
-                    # Execute tool calls and feed results back
-                    tool_results = []
-                    for block in response.content:
-                        if block.type == "tool_use":
-                            result = _execute_tool(block, cwd=repo_path)
-                            log.info("Tool %s executed (output: %d chars)", block.name, len(result))
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": result,
-                            })
-
-                    if not tool_results:
-                        # No tool calls and stop reason isn't end_turn — break to avoid infinite loop
-                        log.warning("No tool calls and stop_reason=%s — breaking loop", response.stop_reason)
-                        break
-
-                    messages.append({"role": "user", "content": tool_results})
-                else:
-                    span.set_attribute("claude.timeout", True)
-                    exc = TimeoutError("Claude implement tool loop exceeded 1800s")
-                    span.record_exception(exc)
-                    raise exc
-
-                span.set_attribute("claude.turns", turn_count)
+            span.set_attribute("claude.turns", turn_count)
 
         except anthropic.RateLimitError as e:
             log.error("Claude API rate limit hit: %s", e)

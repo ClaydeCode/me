@@ -23,21 +23,6 @@ def _mock_settings(dir_path, model="claude-sonnet-4-6", api_key="test-key"):
     return s
 
 
-def _make_text_response(text="plan output", input_tokens=100, output_tokens=50):
-    """Build a minimal mock response for text-only mode."""
-    block = MagicMock()
-    block.text = text
-    response = MagicMock()
-    response.content = [block]
-    response.usage.input_tokens = input_tokens
-    response.usage.output_tokens = output_tokens
-    response._raw_response.headers = {
-        "anthropic-ratelimit-requests-remaining": "99",
-        "anthropic-ratelimit-tokens-remaining": "50000",
-    }
-    return response
-
-
 def _make_tool_use_block(tool_name, tool_id, input_data):
     """Build a mock tool_use block."""
     block = MagicMock()
@@ -49,11 +34,10 @@ def _make_tool_use_block(tool_name, tool_id, input_data):
 
 
 def _make_end_turn_response(text="done", input_tokens=200, output_tokens=100):
-    """Build a mock end_turn response for tool-use mode."""
+    """Build a mock end_turn response."""
     text_block = MagicMock()
     text_block.type = "text"
     text_block.text = text
-    # hasattr(block, 'text') must be True
     response = MagicMock()
     response.content = [text_block]
     response.stop_reason = "end_turn"
@@ -67,7 +51,7 @@ def _make_end_turn_response(text="done", input_tokens=200, output_tokens=100):
 
 
 def _make_tool_response(tool_blocks, input_tokens=150, output_tokens=80):
-    """Build a mock tool_use stop response for tool-use mode."""
+    """Build a mock tool_use stop response."""
     response = MagicMock()
     response.content = tool_blocks
     response.stop_reason = "tool_use"
@@ -171,88 +155,18 @@ class TestExecuteTool:
         assert "[error:" in result
 
 
-class TestInvokeClaudeTextMode:
-    def test_success_returns_text(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("identity text")
-        mock_response = _make_text_response("plan output")
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
-             patch("clayde.claude._get_client", return_value=mock_client):
-            result = invoke_claude("test prompt", "/some/repo", use_tools=False)
-
-        assert result == "plan output"
-        mock_client.messages.create.assert_called_once()
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert call_kwargs["model"] == "claude-sonnet-4-6"
-        assert call_kwargs["messages"][0]["content"] == "test prompt"
-
-    def test_rate_limit_raises_usage_limit_error(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("identity")
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = anthropic.RateLimitError(
-            message="rate limit", response=MagicMock(), body={}
-        )
-
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
-             patch("clayde.claude._get_client", return_value=mock_client):
-            with pytest.raises(UsageLimitError):
-                invoke_claude("prompt", "/repo", use_tools=False)
-
-    def test_overloaded_529_raises_usage_limit_error(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("identity")
-        mock_response_obj = MagicMock()
-        mock_response_obj.status_code = 529
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = anthropic.APIStatusError(
-            message="overloaded", response=mock_response_obj, body={}
-        )
-
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
-             patch("clayde.claude._get_client", return_value=mock_client):
-            with pytest.raises(UsageLimitError):
-                invoke_claude("prompt", "/repo", use_tools=False)
-
-    def test_other_api_error_propagates(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("identity")
-        mock_response_obj = MagicMock()
-        mock_response_obj.status_code = 500
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = anthropic.APIStatusError(
-            message="server error", response=mock_response_obj, body={}
-        )
-
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
-             patch("clayde.claude._get_client", return_value=mock_client):
-            with pytest.raises(anthropic.APIStatusError):
-                invoke_claude("prompt", "/repo", use_tools=False)
-
-    def test_token_usage_attributes_set(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("identity")
-        mock_response = _make_text_response("output", input_tokens=1000, output_tokens=500)
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
-             patch("clayde.claude._get_client", return_value=mock_client):
-            # Just verify it runs without error — span attributes are tested via telemetry
-            result = invoke_claude("test", "/repo", use_tools=False)
-        assert result == "output"
-
-
-class TestInvokeClaudeToolMode:
+class TestInvokeClaude:
     def test_single_turn_end_turn(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
-        end_turn_response = _make_end_turn_response("IMPLEMENTATION_COMPLETE")
+        end_turn_response = _make_end_turn_response("plan output")
         mock_client = MagicMock()
         mock_client.beta.messages.create.return_value = end_turn_response
 
         with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
              patch("clayde.claude._get_client", return_value=mock_client):
-            result = invoke_claude("implement this", str(tmp_path), use_tools=True)
+            result = invoke_claude("test prompt", str(tmp_path))
 
-        assert "IMPLEMENTATION_COMPLETE" in result
+        assert result == "plan output"
         mock_client.beta.messages.create.assert_called_once()
 
     def test_tool_loop_executes_tools_then_end_turn(self, tmp_path):
@@ -271,13 +185,13 @@ class TestInvokeClaudeToolMode:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
              patch("clayde.claude._get_client", return_value=mock_client), \
              patch("clayde.claude._execute_tool", return_value="tool output") as mock_exec:
-            result = invoke_claude("implement", str(tmp_path), use_tools=True)
+            result = invoke_claude("implement", str(tmp_path))
 
         assert result == "finished"
         assert mock_client.beta.messages.create.call_count == 2
         mock_exec.assert_called_once()
 
-    def test_rate_limit_in_tool_mode_raises_usage_limit_error(self, tmp_path):
+    def test_rate_limit_raises_usage_limit_error(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
         mock_client = MagicMock()
         mock_client.beta.messages.create.side_effect = anthropic.RateLimitError(
@@ -287,7 +201,35 @@ class TestInvokeClaudeToolMode:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
              patch("clayde.claude._get_client", return_value=mock_client):
             with pytest.raises(UsageLimitError):
-                invoke_claude("implement", str(tmp_path), use_tools=True)
+                invoke_claude("prompt", "/repo")
+
+    def test_overloaded_529_raises_usage_limit_error(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        mock_response_obj = MagicMock()
+        mock_response_obj.status_code = 529
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.side_effect = anthropic.APIStatusError(
+            message="overloaded", response=mock_response_obj, body={}
+        )
+
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+             patch("clayde.claude._get_client", return_value=mock_client):
+            with pytest.raises(UsageLimitError):
+                invoke_claude("prompt", "/repo")
+
+    def test_other_api_error_propagates(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        mock_response_obj = MagicMock()
+        mock_response_obj.status_code = 500
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.side_effect = anthropic.APIStatusError(
+            message="server error", response=mock_response_obj, body={}
+        )
+
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+             patch("clayde.claude._get_client", return_value=mock_client):
+            with pytest.raises(anthropic.APIStatusError):
+                invoke_claude("prompt", "/repo")
 
     def test_tool_loop_timeout(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
@@ -298,13 +240,10 @@ class TestInvokeClaudeToolMode:
         mock_client = MagicMock()
         mock_client.beta.messages.create.return_value = tool_response
 
-        # Simulate deadline already passed by monkeypatching time.monotonic
         call_count = [0]
-        deadline_time = [None]
 
         def fake_monotonic():
             call_count[0] += 1
-            # First call sets the deadline reference; after 3 calls, simulate timeout
             if call_count[0] <= 1:
                 return 0.0
             return 2000.0  # Way past the 1800s deadline
@@ -314,7 +253,7 @@ class TestInvokeClaudeToolMode:
              patch("clayde.claude._execute_tool", return_value="output"), \
              patch("clayde.claude.time.monotonic", side_effect=fake_monotonic):
             with pytest.raises(TimeoutError):
-                invoke_claude("implement", str(tmp_path), use_tools=True)
+                invoke_claude("implement", str(tmp_path))
 
     def test_token_usage_accumulated_across_turns(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
@@ -329,10 +268,9 @@ class TestInvokeClaudeToolMode:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
              patch("clayde.claude._get_client", return_value=mock_client), \
              patch("clayde.claude._execute_tool", return_value="x"):
-            result = invoke_claude("impl", str(tmp_path), use_tools=True)
+            result = invoke_claude("impl", str(tmp_path))
 
         assert result == "done"
-        # Two turns were made
         assert mock_client.beta.messages.create.call_count == 2
 
 

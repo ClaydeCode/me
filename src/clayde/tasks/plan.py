@@ -43,7 +43,7 @@ def run(issue_url: str) -> None:
 
         log.info("Invoking Claude for planning issue #%d", number)
         try:
-            plan_text = invoke_claude(prompt, repo_path, use_tools=False)
+            plan_text = invoke_claude(prompt, repo_path)
         except UsageLimitError:
             log.warning("Usage limit hit during planning #%d — will retry next cycle", number)
             span.set_attribute("plan.status", "limit")
