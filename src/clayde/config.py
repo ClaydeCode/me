@@ -13,7 +13,7 @@ _settings: "Settings | None" = None
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="CLAYDE_",
-        env_file=Path(os.environ.get("CLAYDE_DIR", "/home/ubuntu/clayde")) / "config.env",
+        env_file=Path(os.environ.get("CLAYDE_DIR", Path.cwd())) / "config.env",
         env_file_encoding="utf-8",
     )
 
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     github_username: str = "ClaydeCode"
     enabled: bool = False
     whitelisted_users: str = "max-tet,ClaydeCode"
-    dir: Path = Path("/home/ubuntu/clayde")
+    dir: Path = Path(os.environ.get("CLAYDE_DIR", Path.cwd()))
 
     @property
     def whitelisted_users_list(self) -> list[str]:
