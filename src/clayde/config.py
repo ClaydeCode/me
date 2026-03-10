@@ -52,8 +52,9 @@ def get_settings() -> Settings:
 
 def _reset_settings() -> None:
     """Clear the cached settings (for testing)."""
-    global _settings
+    global _settings, _logging_initialized
     _settings = None
+    _logging_initialized = False
 
 
 def get_github_client() -> "Github":
@@ -61,8 +62,19 @@ def get_github_client() -> "Github":
     return Github(auth=Auth.Token(get_settings().github_token))
 
 
+_logging_initialized = False
+
+
 def setup_logging() -> None:
-    """Configure stdlib logging to append to the agent log file."""
+    """Configure stdlib logging to append to the agent log file.
+
+    Safe to call multiple times — only adds the handler once.
+    """
+    global _logging_initialized
+    if _logging_initialized:
+        return
+    _logging_initialized = True
+
     log_file = get_settings().log_file
     log_file.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(log_file)

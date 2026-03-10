@@ -268,6 +268,11 @@ def is_claude_available() -> bool:
             log.warning("Claude availability check: rate limit hit — %s", e)
             span.set_attribute("claude.available", False)
             return False
+        except anthropic.AuthenticationError as exc:
+            log.error("Claude availability check: authentication failed — %s", exc)
+            span.set_attribute("claude.available", False)
+            span.set_attribute("claude.check_error", str(exc))
+            return False
         except Exception as exc:
             log.warning("Claude availability pre-check raised %s — assuming available", exc)
             span.set_attribute("claude.available", True)
