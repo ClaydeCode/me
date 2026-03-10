@@ -24,9 +24,9 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 - **Project root:** `/home/ubuntu/clayde/`
 - **Python:** ≥3.12, managed with `uv` (`~/.local/bin/uv`)
 - **Package manager:** `uv` (hatchling build backend)
-- **Entry point:** `clayde.orchestrator:main` (console script `clayde`)
-- **Cron:** every 5 min → `cd /home/ubuntu/clayde && uv run clayde 2>> logs/agent.log`
-- **Claude CLI:** `~/.local/bin/claude` (Claude Code Pro, no separate API key)
+- **Entry points:** `clayde` → `orchestrator:run_loop` (container mode, continuous loop), `clayde-once` → `orchestrator:main` (single cycle)
+- **Deployment:** Docker container via `docker-compose.yml` (replaces cron); loop interval configurable via `CLAYDE_INTERVAL` env var (default 300s)
+- **Claude:** Anthropic Python SDK (`anthropic` package) with API key — no CLI dependency
 - **Git credential helper:** `/home/ubuntu/clayde/git-credential-clayde.sh` (reads PAT from `config.env`)
 - **Git identity:** `user.name = Clayde`, `user.email = clayde@vtettenborn.net`
 
@@ -36,31 +36,40 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 
 ```
 /home/ubuntu/clayde/
-  pyproject.toml          # hatchling build; console script: clayde → orchestrator:main
-  config.env              # GITHUB_TOKEN, GITHUB_USERNAME, CLAYDE_ENABLED
+  pyproject.toml          # hatchling build; console scripts: clayde, clayde-once
+  config.env              # CLAYDE_GITHUB_TOKEN, CLAYDE_CLAUDE_API_KEY, etc.
   state.json              # persisted issue state (keyed by issue HTML URL)
   CLAUDE.md               # this file — identity + project context
+  Dockerfile              # Python 3.13-slim image with git, gh, uv
+  docker-compose.yml      # container deployment config
   git-credential-clayde.sh # git credential helper (reads PAT from config.env)
   gh-issue.md             # slash-command prompt for interactive issue work
   uv.lock
   logs/
-    agent.log             # all [clayde.*] log output (appended by cron)
+    agent.log             # all [clayde.*] log output
+    traces.jsonl          # OpenTelemetry spans (JSONL)
   repos/
     {owner}__{repo}/      # cloned repos (naming: owner__repo)
   src/clayde/
     __init__.py
-    config.py             # CLAYDE_DIR, paths, WHITELISTED_USERS,
-                          #   load_config(), setup_logging(), get_github_client()
+    config.py             # Settings (pydantic-settings), get_settings(),
+                          #   get_github_client(), setup_logging()
     state.py              # load_state(), save_state(), get_issue_state(),
                           #   update_issue_state()
     github.py             # PyGitHub wrappers: parse_issue_url(), fetch_issue(),
                           #   fetch_issue_comments(), post_comment(), fetch_comment(),
                           #   get_default_branch(), get_assigned_issues(),
-                          #   extract_branch_name(), find_open_pr()
+                          #   extract_branch_name(), find_open_pr(), create_pull_request()
     git.py                # ensure_repo() — clone or update repos under REPOS_DIR
     safety.py             # is_issue_authorized(), is_plan_approved() — safety gates
-    claude.py             # invoke_claude(prompt, repo_path) — subprocess to claude CLI
-    orchestrator.py       # main() — cron entry point, state machine dispatcher
+    claude.py             # invoke_claude(prompt, repo_path) — Anthropic SDK with
+                          #   tool-use loop (bash + str_replace_editor)
+    telemetry.py          # OpenTelemetry tracing: init_tracer(), get_tracer(),
+                          #   FileSpanExporter (JSONL)
+    orchestrator.py       # main() — single cycle, run_loop() — container entry point
+    prompts/
+      plan.j2             # Jinja2 template for plan prompt
+      implement.j2        # Jinja2 template for implement prompt
     tasks/
       __init__.py
       plan.py             # run(issue_url) — research + post plan comment
@@ -71,16 +80,18 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 
 ## Configuration (`config.env`)
 
-Plain `KEY=VALUE` file (no shell quoting). Keys:
+Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are loaded by pydantic-settings into the `Settings` class.
 
 | Key | Purpose |
 |-----|---------|
-| `GITHUB_TOKEN` | Fine-grained PAT with Issues R/W, Pull Requests R/W, Contents R/W |
-| `GITHUB_USERNAME` | `ClaydeCode` |
+| `CLAYDE_GITHUB_TOKEN` | Fine-grained PAT with Issues R/W, Pull Requests R/W, Contents R/W |
+| `CLAYDE_GITHUB_USERNAME` | `ClaydeCode` |
 | `CLAYDE_ENABLED` | Set to `true` to activate; any other value causes immediate exit |
-| `WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames (e.g. `max-tet,ClaydeCode`) |
+| `CLAYDE_WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames (e.g. `max-tet,ClaydeCode`) |
+| `CLAYDE_CLAUDE_API_KEY` | Anthropic API key for Claude SDK calls |
+| `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-sonnet-4-6`) |
 
-Config is loaded by `load_config()` and `GH_TOKEN` is exported from it at startup.
+Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at startup for the `gh` CLI.
 
 ---
 
@@ -124,11 +135,14 @@ Whitelisted users: configured via `WHITELISTED_USERS` in `config.env` (comma-sep
 invoke_claude(prompt, repo_path)
 ```
 
-- Runs `claude -p <prompt> --append-system-prompt <CLAUDE.md contents> --dangerously-skip-permissions`
-- Working directory: the cloned repo path
-- Timeout: 1800 seconds (30 min)
-- `CLAUDECODE` env var is unset before invocation to avoid nested-session error
-- Returns stdout; logs non-zero exit codes and first 500 chars of stderr
+- Uses the Anthropic Python SDK (`anthropic` package) directly — no CLI dependency
+- Tool-use mode with `bash` and `str_replace_editor` tools (computer-use beta)
+- System prompt: CLAUDE.md contents
+- Model: configurable via `CLAYDE_CLAUDE_MODEL` (default: `claude-sonnet-4-6`)
+- Tool execution loop: Claude requests tool calls, Python executes them locally (cwd = repo_path), results fed back
+- Timeout: 1800 seconds (30 min) for the full tool loop
+- Rate/usage limit detection: raises `UsageLimitError` on 429 or 529 status codes
+- Token usage and cost tracking via OpenTelemetry spans
 
 ---
 
