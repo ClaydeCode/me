@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     enabled: bool = False
     whitelisted_users: str = "max-tet,ClaydeCode"
     dir: Path = Path(os.environ.get("CLAYDE_DIR", Path.cwd()))
+    claude_api_key: str = ""
+    claude_model: str = "claude-sonnet-4-6"
 
     @property
     def whitelisted_users_list(self) -> list[str]:
