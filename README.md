@@ -18,7 +18,7 @@ Clayde is assigned GitHub issues in software repositories. For each issue it:
 4. Implements the solution on a new branch
 5. Opens a pull request and posts a summary comment
 
-Clayde runs as a cron job every 5 minutes, driven by a state machine persisted in `state.json`.
+Clayde runs as a Docker container in a continuous loop (default: every 5 minutes), driven by a state machine persisted in `state.json`.
 
 ---
 
@@ -33,12 +33,12 @@ Each issue moves through the following states:
 
 | State | Description |
 |---|---|
-| `planning` | Claude CLI is being invoked to research and write a plan |
+| `planning` | Claude is researching and writing a plan |
 | `awaiting_approval` | Plan posted as comment; waiting for 👍 from an approver |
-| `implementing` | Claude CLI is being invoked to implement the solution |
+| `implementing` | Claude is implementing the solution |
 | `done` | PR opened; issue complete |
 | `failed` | Error occurred; requires manual reset to retry |
-| `interrupted` | Claude hit a usage/rate limit; retried automatically next cron tick |
+| `interrupted` | Claude hit a usage/rate limit; retried automatically next cycle |
 
 ---
 
@@ -50,9 +50,9 @@ Two independent checks must pass before any work begins:
 The issue must be created by a whitelisted user, or have a 👍 reaction from a whitelisted user on the issue itself.
 
 **2. Plan approval gate** (before implementation)
-The plan comment must have a 👍 reaction from the designated approver (`max-tet`), and the issue itself must also have a 👍 from a whitelisted user.
+The plan comment must have a 👍 reaction from any whitelisted user.
 
-Whitelisted users: `max-tet`, `ClaydeCode`
+Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `config.env`.
 
 This two-tier system ensures Clayde only acts on trusted issues and only implements plans that have been explicitly reviewed and approved.
 
@@ -64,6 +64,8 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 - **Full issue lifecycle**: Plan → approval → implement → PR, with comments at each stage
 - **Rate-limit resilience**: Detects Claude usage limits and automatically retries
 - **Safety gates**: Whitelist + approval checks prevent unauthorized work
+- **Observability**: OpenTelemetry tracing with JSONL file export and optional OTLP export
+- **Tool-use loop**: Claude can execute bash commands and edit files in the target repo via the Anthropic SDK
 
 ---
 
@@ -71,21 +73,27 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 
 | Component | Tool |
 |---|---|
-| Language | Python 3.12 |
+| Language | Python 3.13 |
 | Package manager | `uv` |
-| LLM | Claude (via Claude Code CLI) |
-| GitHub API | `gh` CLI |
-| Scheduling | cron (every 5 min) |
+| LLM | Claude (via Anthropic Python SDK) |
+| GitHub API | PyGitHub |
+| Deployment | Docker (continuous loop) |
+| Configuration | pydantic-settings |
+| Templating | Jinja2 |
+| Observability | OpenTelemetry |
 | State persistence | `state.json` |
 
 ---
 
 ## Configuration
 
-`config.env` (plain `KEY=VALUE`):
+`config.env` (plain `KEY=VALUE`, all prefixed with `CLAYDE_`):
 
-| Key | Purpose                               |
-|---|---------------------------------------|
-| `GITHUB_TOKEN` | Classic Token (full repo permissions) |
-| `GITHUB_USERNAME` | `ClaydeCode`                          |
-| `CLAYDE_ENABLED` | Set to `true` to activate             |
+| Key | Purpose |
+|---|---|
+| `CLAYDE_GITHUB_TOKEN` | Fine-grained PAT (Issues R/W, PRs R/W, Contents R/W) |
+| `CLAYDE_GITHUB_USERNAME` | `ClaydeCode` |
+| `CLAYDE_ENABLED` | Set to `true` to activate |
+| `CLAYDE_WHITELISTED_USERS` | Comma-separated trusted GitHub usernames |
+| `CLAYDE_CLAUDE_API_KEY` | Anthropic API key |
+| `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-sonnet-4-6`) |
