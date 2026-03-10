@@ -14,7 +14,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, Sp
 log = logging.getLogger("clayde.telemetry")
 
 _TRACES_FILE = str(
-    Path(os.environ.get("CLAYDE_DIR", "/home/ubuntu/clayde")) / "logs" / "traces.jsonl"
+    Path(os.environ.get("CLAYDE_DIR", Path.cwd())) / "logs" / "traces.jsonl"
 )
 
 
