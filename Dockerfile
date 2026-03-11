@@ -33,4 +33,4 @@ RUN mkdir -p /data/repos /data/logs
 
 ENV CLAYDE_DIR=/data
 
-ENTRYPOINT ["uv", "run", "clayde"]
+ENTRYPOINT ["/app/.venv/bin/clayde"]
