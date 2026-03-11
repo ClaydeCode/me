@@ -1,6 +1,6 @@
 services:
   clayde:
-    image: ghcr.io/claydecode/me:latest
+    image: ghcr.io/claydecode/me:main
     restart: unless-stopped
     env_file: config.env
     environment:
