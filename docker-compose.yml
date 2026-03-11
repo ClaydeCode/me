@@ -1,20 +1,13 @@
 services:
   clayde:
-    build: .
     image: ghcr.io/claydecode/me:latest
     restart: unless-stopped
     env_file: config.env
     environment:
       - CLAYDE_DIR=/data
       - CLAYDE_ENABLED=true
-      - CLAUDE_BIN=/claude/claude
     volumes:
       - ./state.json:/data/state.json
       - ./repos:/data/repos
       - ./logs:/data/logs
       - ./config.env:/data/config.env:ro
-      - ./CLAUDE.md:/app/CLAUDE.md:ro
-      - ~/.local/bin/claude:/claude/claude:ro
-      - ~/.config/claude:/root/.config/claude:ro
-      - ~/.claude:/root/.claude:ro
-      - ~/.config/gh:/root/.config/gh:ro

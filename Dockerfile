@@ -32,6 +32,5 @@ RUN uv sync --frozen --no-dev
 RUN mkdir -p /data/repos /data/logs
 
 ENV CLAYDE_DIR=/data
-ENV CLAUDE_BIN=/claude/claude
 
 ENTRYPOINT ["uv", "run", "clayde"]
