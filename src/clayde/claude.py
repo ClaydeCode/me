@@ -45,7 +45,7 @@ def _calculate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> fl
 
 
 def _execute_tool(block, cwd: str) -> str:
-    """Execute a bash or str_replace_editor tool call locally and return output."""
+    """Execute a bash or text_editor tool call locally and return output."""
     if block.name == "bash":
         cmd = block.input.get("command", "")
         try:
@@ -66,7 +66,7 @@ def _execute_tool(block, cwd: str) -> str:
         except Exception as e:
             return f"[error: {e}]"
 
-    elif block.name == "str_replace_editor":
+    elif block.name == "text_editor":
         command = block.input.get("command", "view")
         path = block.input.get("path", "")
         full_path = Path(cwd) / path if path and not Path(path).is_absolute() else Path(path)
@@ -110,7 +110,7 @@ def _execute_tool(block, cwd: str) -> str:
             return "[error: undo_edit not supported]"
 
         else:
-            return f"[error: unknown str_replace_editor command: {command}]"
+            return f"[error: unknown text_editor command: {command}]"
 
     else:
         return f"[error: unknown tool: {block.name}]"
@@ -119,7 +119,7 @@ def _execute_tool(block, cwd: str) -> str:
 def invoke_claude(prompt: str, repo_path: str) -> str:
     """Invoke the Claude API with the given prompt.
 
-    Uses tool-use mode (bash + str_replace_editor) so Claude can explore and
+    Uses tool-use mode (bash + text_editor) so Claude can explore and
     modify the repository.
 
     Args:
@@ -143,8 +143,8 @@ def invoke_claude(prompt: str, repo_path: str) -> str:
 
         try:
             tools = [
-                {"type": "bash_20241022", "name": "bash"},
-                {"type": "str_replace_editor_20241022", "name": "str_replace_editor"},
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "text_editor_20250429", "name": "text_editor"},
             ]
             messages = [{"role": "user", "content": prompt}]
             deadline = time.monotonic() + 1800

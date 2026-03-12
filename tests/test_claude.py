@@ -99,49 +99,49 @@ class TestExecuteTool:
             result = _execute_tool(block, cwd=str(tmp_path))
         assert "timed out" in result
 
-    def test_str_replace_editor_view_file(self, tmp_path):
+    def test_text_editor_view_file(self, tmp_path):
         f = tmp_path / "test.txt"
         f.write_text("file contents")
         block = MagicMock()
-        block.name = "str_replace_editor"
+        block.name = "text_editor"
         block.input = {"command": "view", "path": "test.txt"}
         result = _execute_tool(block, cwd=str(tmp_path))
         assert result == "file contents"
 
-    def test_str_replace_editor_view_dir(self, tmp_path):
+    def test_text_editor_view_dir(self, tmp_path):
         (tmp_path / "a.py").write_text("")
         (tmp_path / "b.py").write_text("")
         block = MagicMock()
-        block.name = "str_replace_editor"
+        block.name = "text_editor"
         block.input = {"command": "view", "path": "."}
         result = _execute_tool(block, cwd=str(tmp_path))
         assert "a.py" in result
         assert "b.py" in result
 
-    def test_str_replace_editor_create(self, tmp_path):
+    def test_text_editor_create(self, tmp_path):
         block = MagicMock()
-        block.name = "str_replace_editor"
+        block.name = "text_editor"
         block.input = {"command": "create", "path": "new.txt", "file_text": "hello"}
         result = _execute_tool(block, cwd=str(tmp_path))
         assert "created" in result.lower()
         assert (tmp_path / "new.txt").read_text() == "hello"
 
-    def test_str_replace_editor_str_replace(self, tmp_path):
+    def test_text_editor_str_replace(self, tmp_path):
         f = tmp_path / "edit.txt"
         f.write_text("old text here")
         block = MagicMock()
-        block.name = "str_replace_editor"
+        block.name = "text_editor"
         block.input = {"command": "str_replace", "path": "edit.txt",
                        "old_str": "old text", "new_str": "new text"}
         result = _execute_tool(block, cwd=str(tmp_path))
         assert "Replacement done" in result
         assert f.read_text() == "new text here"
 
-    def test_str_replace_editor_str_replace_not_found(self, tmp_path):
+    def test_text_editor_str_replace_not_found(self, tmp_path):
         f = tmp_path / "edit.txt"
         f.write_text("content")
         block = MagicMock()
-        block.name = "str_replace_editor"
+        block.name = "text_editor"
         block.input = {"command": "str_replace", "path": "edit.txt",
                        "old_str": "nonexistent", "new_str": "replacement"}
         result = _execute_tool(block, cwd=str(tmp_path))

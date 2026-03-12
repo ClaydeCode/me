@@ -54,7 +54,7 @@ src/clayde/
   git.py                # ensure_repo() — clone or update repos under REPOS_DIR
   safety.py             # is_issue_authorized(), is_plan_approved() — safety gates
   claude.py             # invoke_claude(prompt, repo_path) — Anthropic SDK with
-                        #   tool-use loop (bash + str_replace_editor)
+                        #   tool-use loop (bash + text_editor)
   telemetry.py          # OpenTelemetry tracing: init_tracer(), get_tracer(),
                         #   FileSpanExporter (JSONL)
   orchestrator.py       # main() — single cycle, run_loop() — container entry point
@@ -138,7 +138,7 @@ invoke_claude(prompt, repo_path)
 ```
 
 - Uses the Anthropic Python SDK (`anthropic` package) directly — no CLI dependency
-- Tool-use mode with `bash` and `str_replace_editor` tools (computer-use beta)
+- Tool-use mode with `bash` and `text_editor` tools (computer-use beta)
 - System prompt: CLAUDE.md contents
 - Model: configurable via `CLAYDE_CLAUDE_MODEL` (default: `claude-sonnet-4-6`)
 - Tool execution loop: Claude requests tool calls, Python executes them locally (cwd = repo_path), results fed back
