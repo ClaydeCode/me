@@ -103,7 +103,7 @@ class TestExecuteTool:
         f = tmp_path / "test.txt"
         f.write_text("file contents")
         block = MagicMock()
-        block.name = "text_editor"
+        block.name = "str_replace_based_edit_tool"
         block.input = {"command": "view", "path": "test.txt"}
         result = _execute_tool(block, cwd=str(tmp_path))
         assert result == "file contents"
@@ -112,7 +112,7 @@ class TestExecuteTool:
         (tmp_path / "a.py").write_text("")
         (tmp_path / "b.py").write_text("")
         block = MagicMock()
-        block.name = "text_editor"
+        block.name = "str_replace_based_edit_tool"
         block.input = {"command": "view", "path": "."}
         result = _execute_tool(block, cwd=str(tmp_path))
         assert "a.py" in result
@@ -120,7 +120,7 @@ class TestExecuteTool:
 
     def test_text_editor_create(self, tmp_path):
         block = MagicMock()
-        block.name = "text_editor"
+        block.name = "str_replace_based_edit_tool"
         block.input = {"command": "create", "path": "new.txt", "file_text": "hello"}
         result = _execute_tool(block, cwd=str(tmp_path))
         assert "created" in result.lower()
@@ -130,7 +130,7 @@ class TestExecuteTool:
         f = tmp_path / "edit.txt"
         f.write_text("old text here")
         block = MagicMock()
-        block.name = "text_editor"
+        block.name = "str_replace_based_edit_tool"
         block.input = {"command": "str_replace", "path": "edit.txt",
                        "old_str": "old text", "new_str": "new text"}
         result = _execute_tool(block, cwd=str(tmp_path))
@@ -141,7 +141,7 @@ class TestExecuteTool:
         f = tmp_path / "edit.txt"
         f.write_text("content")
         block = MagicMock()
-        block.name = "text_editor"
+        block.name = "str_replace_based_edit_tool"
         block.input = {"command": "str_replace", "path": "edit.txt",
                        "old_str": "nonexistent", "new_str": "replacement"}
         result = _execute_tool(block, cwd=str(tmp_path))

@@ -66,7 +66,7 @@ def _execute_tool(block, cwd: str) -> str:
         except Exception as e:
             return f"[error: {e}]"
 
-    elif block.name == "text_editor":
+    elif block.name == "str_replace_based_edit_tool":
         command = block.input.get("command", "view")
         path = block.input.get("path", "")
         full_path = Path(cwd) / path if path and not Path(path).is_absolute() else Path(path)
@@ -144,7 +144,7 @@ def invoke_claude(prompt: str, repo_path: str) -> str:
         try:
             tools = [
                 {"type": "bash_20250124", "name": "bash"},
-                {"type": "text_editor_20250429", "name": "text_editor"},
+                {"type": "text_editor_20250429", "name": "str_replace_based_edit_tool"},
             ]
             messages = [{"role": "user", "content": prompt}]
             deadline = time.monotonic() + 1800
