@@ -7,7 +7,7 @@ from pathlib import Path
 
 import anthropic
 
-from clayde.config import get_settings
+from clayde.config import APP_DIR, get_settings
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.claude")
@@ -133,7 +133,7 @@ def invoke_claude(prompt: str, repo_path: str) -> str:
     with tracer.start_as_current_span("clayde.invoke_claude") as span:
         settings = get_settings()
         model = settings.claude_model
-        identity = (settings.dir / "CLAUDE.md").read_text()
+        identity = (APP_DIR / "CLAUDE.md").read_text()
         client = _get_client()
 
         span.set_attribute("claude.model", model)

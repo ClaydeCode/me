@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from unittest.mock import patch
 
+import clayde.config
 from clayde.config import Settings, _reset_settings, get_settings, setup_logging
 
 
@@ -21,7 +22,6 @@ class TestSettings:
         monkeypatch.delenv("CLAYDE_GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("CLAYDE_ENABLED", raising=False)
         monkeypatch.delenv("CLAYDE_WHITELISTED_USERS", raising=False)
-        monkeypatch.delenv("CLAYDE_DIR", raising=False)
         s = Settings(_env_file=None)
         assert s.github_token == ""
         assert s.enabled is False
@@ -42,12 +42,11 @@ class TestSettings:
         s = Settings(_env_file=None)
         assert s.whitelisted_users_list == ["alice", "bob", "charlie"]
 
-    def test_derived_paths(self, monkeypatch):
-        monkeypatch.setenv("CLAYDE_DIR", "/custom/dir")
-        s = Settings(_env_file=None)
-        assert s.state_file == Path("/custom/dir/state.json")
-        assert s.log_file == Path("/custom/dir/logs/agent.log")
-        assert s.repos_dir == Path("/custom/dir/repos")
+    def test_data_dir_paths(self):
+        from clayde.config import DATA_DIR
+        assert DATA_DIR / "state.json" == Path("/data/state.json")
+        assert DATA_DIR / "logs" / "agent.log" == Path("/data/logs/agent.log")
+        assert DATA_DIR / "repos" == Path("/data/repos")
 
     def test_value_with_equals_sign(self, tmp_path, monkeypatch):
         env_file = tmp_path / "config.env"
@@ -99,9 +98,8 @@ class TestGetGithubClient:
 class TestSetupLogging:
     def test_creates_handler_and_configures_logger(self, tmp_path, monkeypatch):
         _reset_settings()
-        monkeypatch.setenv("CLAYDE_DIR", str(tmp_path))
-        with patch("clayde.config.Settings", side_effect=lambda **kw: Settings(_env_file=None)):
-            setup_logging()
+        monkeypatch.setattr(clayde.config, "DATA_DIR", tmp_path)
+        setup_logging()
         log_file = str(tmp_path / "logs" / "agent.log")
         logger = logging.getLogger("clayde")
         assert logger.level == logging.INFO

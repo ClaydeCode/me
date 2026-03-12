@@ -17,7 +17,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Configure git credential helper for gh
 RUN git config --global credential.helper '!gh auth git-credential'
 
-WORKDIR /app
+WORKDIR /opt/clayde
 
 # Install dependencies first (layer caching)
 COPY pyproject.toml uv.lock ./
@@ -31,6 +31,4 @@ RUN uv sync --frozen --no-dev
 # Create data directories
 RUN mkdir -p /data/repos /data/logs
 
-ENV CLAYDE_DIR=/data
-
-ENTRYPOINT ["/app/.venv/bin/clayde"]
+ENTRYPOINT ["/opt/clayde/.venv/bin/clayde"]

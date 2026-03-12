@@ -2,12 +2,7 @@ services:
   clayde:
     image: ghcr.io/claydecode/me:main
     restart: unless-stopped
-    env_file: config.env
     environment:
-      - CLAYDE_DIR=/data
       - CLAYDE_ENABLED=true
     volumes:
-      - ./state.json:/data/state.json
-      - ./repos:/data/repos
-      - ./logs:/data/logs
-      - ./config.env:/data/config.env:ro
+      - ./data:/data

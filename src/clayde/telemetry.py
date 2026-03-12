@@ -11,11 +11,11 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
+from clayde.config import DATA_DIR
+
 log = logging.getLogger("clayde.telemetry")
 
-_TRACES_FILE = str(
-    Path(os.environ.get("CLAYDE_DIR", Path.cwd())) / "logs" / "traces.jsonl"
-)
+_TRACES_FILE = str(DATA_DIR / "logs" / "traces.jsonl")
 
 
 class FileSpanExporter(SpanExporter):

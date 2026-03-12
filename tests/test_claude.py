@@ -15,9 +15,8 @@ from clayde.claude import (
 )
 
 
-def _mock_settings(dir_path, model="claude-sonnet-4-6", api_key="test-key"):
+def _mock_settings(model="claude-sonnet-4-6", api_key="test-key"):
     s = MagicMock()
-    s.dir = Path(dir_path)
     s.claude_model = model
     s.claude_api_key = api_key
     return s
@@ -162,7 +161,8 @@ class TestInvokeClaude:
         mock_client = MagicMock()
         mock_client.beta.messages.create.return_value = end_turn_response
 
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client):
             result = invoke_claude("test prompt", str(tmp_path))
 
@@ -182,7 +182,8 @@ class TestInvokeClaude:
         mock_client = MagicMock()
         mock_client.beta.messages.create.side_effect = [tool_response, end_response]
 
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client), \
              patch("clayde.claude._execute_tool", return_value="tool output") as mock_exec:
             result = invoke_claude("implement", str(tmp_path))
@@ -198,7 +199,8 @@ class TestInvokeClaude:
             message="rate limit", response=MagicMock(), body={}
         )
 
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client):
             with pytest.raises(UsageLimitError):
                 invoke_claude("prompt", "/repo")
@@ -212,7 +214,8 @@ class TestInvokeClaude:
             message="overloaded", response=mock_response_obj, body={}
         )
 
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client):
             with pytest.raises(UsageLimitError):
                 invoke_claude("prompt", "/repo")
@@ -226,7 +229,8 @@ class TestInvokeClaude:
             message="server error", response=mock_response_obj, body={}
         )
 
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client):
             with pytest.raises(anthropic.APIStatusError):
                 invoke_claude("prompt", "/repo")
@@ -248,7 +252,8 @@ class TestInvokeClaude:
                 return 0.0
             return 2000.0  # Way past the 1800s deadline
 
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client), \
              patch("clayde.claude._execute_tool", return_value="output"), \
              patch("clayde.claude.time.monotonic", side_effect=fake_monotonic):
@@ -265,7 +270,8 @@ class TestInvokeClaude:
         mock_client = MagicMock()
         mock_client.beta.messages.create.side_effect = [turn1, turn2]
 
-        with patch("clayde.claude.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client), \
              patch("clayde.claude._execute_tool", return_value="x"):
             result = invoke_claude("impl", str(tmp_path))

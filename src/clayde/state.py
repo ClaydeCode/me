@@ -5,20 +5,21 @@ import logging
 
 from opentelemetry import trace
 
-from clayde.config import get_settings
+from clayde.config import DATA_DIR
 
 log = logging.getLogger("clayde.state")
 
+_STATE_FILE = DATA_DIR / "state.json"
+
 
 def load_state():
-    state_file = get_settings().state_file
-    if state_file.exists():
-        return json.loads(state_file.read_text())
+    if _STATE_FILE.exists():
+        return json.loads(_STATE_FILE.read_text())
     return {"issues": {}}
 
 
 def save_state(state):
-    get_settings().state_file.write_text(json.dumps(state, indent=2))
+    _STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
 def get_issue_state(issue_url):
