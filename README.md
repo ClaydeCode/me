@@ -96,4 +96,4 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 | `CLAYDE_ENABLED` | Set to `true` to activate |
 | `CLAYDE_WHITELISTED_USERS` | Comma-separated trusted GitHub usernames |
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key |
-| `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-sonnet-4-6`) |
+| `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |

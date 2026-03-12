@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     enabled: bool = False
     whitelisted_users: str = "max-tet,ClaydeCode"
     claude_api_key: str = ""
-    claude_model: str = "claude-sonnet-4-6"
+    claude_model: str = "claude-opus-4-6"
 
     @property
     def whitelisted_users_list(self) -> list[str]:

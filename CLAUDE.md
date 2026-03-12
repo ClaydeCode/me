@@ -91,7 +91,7 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 | `CLAYDE_ENABLED` | Set to `true` to activate; any other value causes immediate exit |
 | `CLAYDE_WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames (e.g. `max-tet,ClaydeCode`) |
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key for Claude SDK calls |
-| `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-sonnet-4-6`) |
+| `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
 
 Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at startup for the `gh` CLI.
 
@@ -140,7 +140,7 @@ invoke_claude(prompt, repo_path)
 - Uses the Anthropic Python SDK (`anthropic` package) directly — no CLI dependency
 - Tool-use mode with `bash` and `text_editor` tools (computer-use beta)
 - System prompt: CLAUDE.md contents
-- Model: configurable via `CLAYDE_CLAUDE_MODEL` (default: `claude-sonnet-4-6`)
+- Model: configurable via `CLAYDE_CLAUDE_MODEL` (default: `claude-opus-4-6`)
 - Tool execution loop: Claude requests tool calls, Python executes them locally (cwd = repo_path), results fed back
 - Timeout: 1800 seconds (30 min) for the full tool loop
 - Rate/usage limit detection: raises `UsageLimitError` on 429 or 529 status codes
