@@ -18,7 +18,7 @@ Clayde is assigned GitHub issues in software repositories. For each issue it:
 4. Implements the solution on a new branch
 5. Opens a pull request and posts a summary comment
 
-Clayde runs as a Docker container in a continuous loop (default: every 5 minutes), driven by a state machine persisted in `state.json`.
+Clayde runs as a Docker container in a continuous loop (default: every 5 minutes), driven by a state machine persisted in `data/state.json`.
 
 ---
 
@@ -52,7 +52,7 @@ The issue must be created by a whitelisted user, or have a 👍 reaction from a 
 **2. Plan approval gate** (before implementation)
 The plan comment must have a 👍 reaction from any whitelisted user.
 
-Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `config.env`.
+Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env`.
 
 This two-tier system ensures Clayde only acts on trusted issues and only implements plans that have been explicitly reviewed and approved.
 
@@ -87,7 +87,7 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 
 ## Configuration
 
-`config.env` (plain `KEY=VALUE`, all prefixed with `CLAYDE_`):
+`data/config.env` (plain `KEY=VALUE`, all prefixed with `CLAYDE_`):
 
 | Key | Purpose |
 |---|---|

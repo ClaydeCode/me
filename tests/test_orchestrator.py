@@ -29,6 +29,7 @@ class TestMain:
     def test_returns_when_claude_unavailable(self):
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
              patch("clayde.orchestrator.is_claude_available", return_value=False), \
              patch("clayde.orchestrator.get_github_client") as mock_gc:
             main()
@@ -37,6 +38,7 @@ class TestMain:
     def test_returns_when_no_assigned_issues(self):
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[]), \
@@ -48,6 +50,7 @@ class TestMain:
         issue.html_url = "https://github.com/o/r/issues/1"
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
@@ -62,6 +65,7 @@ class TestMain:
         state = {"issues": {"url1": {"status": "done"}}}
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \

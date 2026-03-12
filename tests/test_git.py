@@ -8,17 +8,11 @@ import pytest
 import clayde.git as git_mod
 
 
-def _mock_settings(repos_dir):
-    s = MagicMock()
-    s.repos_dir = Path(repos_dir)
-    return s
-
-
 class TestEnsureRepo:
     def test_clones_when_no_git_dir(self, tmp_path):
         repo_path = tmp_path / "alice__myrepo"
 
-        with patch("clayde.git.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch.object(git_mod, "_REPOS_DIR", tmp_path), \
              patch("clayde.git.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             result = git_mod.ensure_repo("alice", "myrepo", "main")
@@ -33,7 +27,7 @@ class TestEnsureRepo:
         repo_path = tmp_path / "alice__myrepo"
         (repo_path / ".git").mkdir(parents=True)
 
-        with patch("clayde.git.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch.object(git_mod, "_REPOS_DIR", tmp_path), \
              patch("clayde.git.subprocess.run") as mock_run:
             result = git_mod.ensure_repo("alice", "myrepo", "main")
 
@@ -47,7 +41,7 @@ class TestEnsureRepo:
         )
 
     def test_clone_failure_raises(self, tmp_path):
-        with patch("clayde.git.get_settings", return_value=_mock_settings(tmp_path)), \
+        with patch.object(git_mod, "_REPOS_DIR", tmp_path), \
              patch("clayde.git.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stderr="fatal: not found")
             with pytest.raises(RuntimeError, match="Clone failed"):

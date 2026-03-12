@@ -20,14 +20,13 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 
 ## Environment
 
-- **VM user:** ubuntu
-- **Project root:** `/home/ubuntu/clayde/`
 - **Python:** ≥3.12, managed with `uv` (`~/.local/bin/uv`)
 - **Package manager:** `uv` (hatchling build backend)
 - **Entry points:** `clayde` → `orchestrator:run_loop` (container mode, continuous loop), `clayde-once` → `orchestrator:main` (single cycle)
-- **Deployment:** Docker container via `docker-compose.yml` (replaces cron); loop interval configurable via `CLAYDE_INTERVAL` env var (default 300s)
+- **Deployment:** Docker container via `docker-compose.yml`; loop interval configurable via `CLAYDE_INTERVAL` env var (default 300s)
+- **Container layout:** Application code at `/opt/clayde`, data at `/data` (single volume mount from host `./data`)
 - **Claude:** Anthropic Python SDK (`anthropic` package) with API key — no CLI dependency
-- **Git credential helper:** `/home/ubuntu/clayde/git-credential-clayde.sh` (reads PAT from `config.env`)
+- **Git credential helper:** `gh auth git-credential` (configured globally in the container)
 - **Git identity:** `user.name = Clayde`, `user.email = clayde@vtettenborn.net`
 
 ---
@@ -35,50 +34,53 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 ## Project Structure
 
 ```
-/home/ubuntu/clayde/
-  pyproject.toml          # hatchling build; console scripts: clayde, clayde-once
-  config.env              # CLAYDE_GITHUB_TOKEN, CLAYDE_CLAUDE_API_KEY, etc.
-  state.json              # persisted issue state (keyed by issue HTML URL)
-  CLAUDE.md               # this file — identity + project context
-  Dockerfile              # Python 3.13-slim image with git, gh, uv
-  docker-compose.yml      # container deployment config
-  git-credential-clayde.sh # git credential helper (reads PAT from config.env)
-  gh-issue.md             # slash-command prompt for interactive issue work
-  uv.lock
-  logs/
-    agent.log             # all [clayde.*] log output
-    traces.jsonl          # OpenTelemetry spans (JSONL)
-  repos/
-    {owner}__{repo}/      # cloned repos (naming: owner__repo)
-  src/clayde/
+# Source repository
+pyproject.toml          # hatchling build; console scripts: clayde, clayde-once
+CLAUDE.md               # this file — identity + project context
+Dockerfile              # Python 3.13-slim image with git, gh, uv
+docker-compose.yml      # container deployment config
+gh-issue.md             # slash-command prompt for interactive issue work
+uv.lock
+src/clayde/
+  __init__.py
+  config.py             # Settings (pydantic-settings), APP_DIR, DATA_DIR,
+                        #   get_settings(), get_github_client(), setup_logging()
+  state.py              # load_state(), save_state(), get_issue_state(),
+                        #   update_issue_state()
+  github.py             # PyGitHub wrappers: parse_issue_url(), fetch_issue(),
+                        #   fetch_issue_comments(), post_comment(), fetch_comment(),
+                        #   get_default_branch(), get_assigned_issues(),
+                        #   extract_branch_name(), find_open_pr(), create_pull_request()
+  git.py                # ensure_repo() — clone or update repos under REPOS_DIR
+  safety.py             # is_issue_authorized(), is_plan_approved() — safety gates
+  claude.py             # invoke_claude(prompt, repo_path) — Anthropic SDK with
+                        #   tool-use loop (bash + str_replace_editor)
+  telemetry.py          # OpenTelemetry tracing: init_tracer(), get_tracer(),
+                        #   FileSpanExporter (JSONL)
+  orchestrator.py       # main() — single cycle, run_loop() — container entry point
+  prompts/
+    plan.j2             # Jinja2 template for plan prompt
+    implement.j2        # Jinja2 template for implement prompt
+  tasks/
     __init__.py
-    config.py             # Settings (pydantic-settings), get_settings(),
-                          #   get_github_client(), setup_logging()
-    state.py              # load_state(), save_state(), get_issue_state(),
-                          #   update_issue_state()
-    github.py             # PyGitHub wrappers: parse_issue_url(), fetch_issue(),
-                          #   fetch_issue_comments(), post_comment(), fetch_comment(),
-                          #   get_default_branch(), get_assigned_issues(),
-                          #   extract_branch_name(), find_open_pr(), create_pull_request()
-    git.py                # ensure_repo() — clone or update repos under REPOS_DIR
-    safety.py             # is_issue_authorized(), is_plan_approved() — safety gates
-    claude.py             # invoke_claude(prompt, repo_path) — Anthropic SDK with
-                          #   tool-use loop (bash + str_replace_editor)
-    telemetry.py          # OpenTelemetry tracing: init_tracer(), get_tracer(),
-                          #   FileSpanExporter (JSONL)
-    orchestrator.py       # main() — single cycle, run_loop() — container entry point
-    prompts/
-      plan.j2             # Jinja2 template for plan prompt
-      implement.j2        # Jinja2 template for implement prompt
-    tasks/
-      __init__.py
-      plan.py             # run(issue_url) — research + post plan comment
-      implement.py        # run(issue_url) — implement + open PR + post result
+    plan.py             # run(issue_url) — research + post plan comment
+    implement.py        # run(issue_url) — implement + open PR + post result
+
+# Container paths
+/opt/clayde/            # application code (WORKDIR)
+/data/                  # mounted from host ./data
+  config.env            # CLAYDE_GITHUB_TOKEN, CLAYDE_CLAUDE_API_KEY, etc.
+  state.json            # persisted issue state (keyed by issue HTML URL)
+  logs/
+    agent.log           # all [clayde.*] log output
+    traces.jsonl        # OpenTelemetry spans (JSONL)
+  repos/
+    {owner}__{repo}/    # cloned repos (naming: owner__repo)
 ```
 
 ---
 
-## Configuration (`config.env`)
+## Configuration (`data/config.env`)
 
 Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are loaded by pydantic-settings into the `Settings` class.
 
@@ -125,7 +127,7 @@ Two independent checks must pass before any work begins:
 1. **Issue-level gate** (before planning): issue must be created by a whitelisted user OR have a 👍 reaction from a whitelisted user on the issue itself.
 2. **Plan approval gate** (before implementation): the plan comment must have a 👍 reaction from any whitelisted user.
 
-Whitelisted users: configured via `WHITELISTED_USERS` in `config.env` (comma-separated).
+Whitelisted users: configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env` (comma-separated).
 
 ---
 
@@ -187,7 +189,7 @@ Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 ## Logging
 
 Format: `[YYYY-MM-DD HH:MM:SS] [clayde.<module>] <message>`
-File: `logs/agent.log` (appended; cron also redirects stderr there)
+File: `/data/logs/agent.log` (appended)
 Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.github`, `clayde.claude`
 
 ---

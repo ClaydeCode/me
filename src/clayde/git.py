@@ -4,9 +4,11 @@ import logging
 import subprocess
 from pathlib import Path
 
-from clayde.config import get_settings
+from clayde.config import DATA_DIR
 
 log = logging.getLogger("clayde.git")
+
+_REPOS_DIR = DATA_DIR / "repos"
 
 
 def ensure_repo(owner: str, repo: str, default_branch: str) -> Path:
@@ -14,7 +16,7 @@ def ensure_repo(owner: str, repo: str, default_branch: str) -> Path:
 
     Returns the local path to the repository.
     """
-    repos_dir = get_settings().repos_dir
+    repos_dir = _REPOS_DIR
     repo_path = repos_dir / f"{owner}__{repo}"
     clone_url = f"https://github.com/{owner}/{repo}.git"
 
