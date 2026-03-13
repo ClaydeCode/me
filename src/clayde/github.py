@@ -6,6 +6,8 @@ import re
 import requests
 from github import Github, GithubException
 
+from clayde.config import get_settings
+
 log = logging.getLogger("clayde.github")
 
 
@@ -102,7 +104,7 @@ def is_blocked(g: Github, owner: str, repo: str, number: int) -> bool:
 
     # Check explicit sub-issue relationships via timeline events
     try:
-        token = g.auth.token if hasattr(g.auth, "token") else None
+        token = get_settings().github_token
         if token:
             if _has_blocking_sub_issue_parents(token, owner, repo, number):
                 return True

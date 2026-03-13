@@ -248,9 +248,10 @@ class TestIsBlocked:
         issue = MagicMock()
         issue.body = "Normal issue"
         g.get_repo.return_value.get_issue.return_value = issue
-        g.auth = MagicMock()
-        g.auth.token = "tok"
-        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=True):
+        settings = MagicMock()
+        settings.github_token = "tok"
+        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=True), \
+             patch("clayde.github.get_settings", return_value=settings):
             assert is_blocked(g, "o", "r", 1) is True
 
     def test_timeline_failure_does_not_block(self):
@@ -258,9 +259,10 @@ class TestIsBlocked:
         issue = MagicMock()
         issue.body = "Normal issue"
         g.get_repo.return_value.get_issue.return_value = issue
-        g.auth = MagicMock()
-        g.auth.token = "tok"
-        with patch("clayde.github._has_blocking_sub_issue_parents", side_effect=Exception("fail")):
+        settings = MagicMock()
+        settings.github_token = "tok"
+        with patch("clayde.github._has_blocking_sub_issue_parents", side_effect=Exception("fail")), \
+             patch("clayde.github.get_settings", return_value=settings):
             # Should not raise, and should not block
             assert is_blocked(g, "o", "r", 1) is False
 
