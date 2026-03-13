@@ -1,12 +1,13 @@
 """Implement task — implement the approved plan, open PR, post result."""
 
 import logging
+import subprocess
 from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
 
 from clayde.claude import UsageLimitError, invoke_claude
-from clayde.config import get_github_client
+from clayde.config import DATA_DIR, get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
     create_pull_request,
@@ -65,16 +66,29 @@ def run(issue_url: str) -> None:
         branch_name = issue_state.get("branch_name") or extract_branch_name(plan_text, number)
         update_issue_state(issue_url, {"branch_name": branch_name})
 
+        # If resuming an interrupted implementation, checkout the WIP branch
+        if resumed and branch_name:
+            _checkout_wip_branch(repo_path, branch_name)
+
         all_comments = fetch_issue_comments(g, owner, repo, number)
         discussion_text = _collect_discussion(all_comments, plan_comment_id)
 
         prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
 
+        conv_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}.json"
+        conv_path.parent.mkdir(parents=True, exist_ok=True)
+
         log.info("Invoking Claude for implementation of issue #%d", number)
         try:
-            output = invoke_claude(prompt, repo_path)
+            output = invoke_claude(
+                prompt,
+                repo_path,
+                branch_name=branch_name,
+                conversation_path=conv_path,
+            )
         except UsageLimitError:
             log.warning("Usage limit hit during implementation #%d — will retry next cycle", number)
+            log.info("Conversation saved to %s", conv_path)
             span.set_attribute("implement.status", "limit")
             update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
             return
@@ -99,6 +113,7 @@ def run(issue_url: str) -> None:
         if pr_url:
             _post_result(g, owner, repo, number, pr_url)
             update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
+            log.info("Conversation saved to %s", conv_path)
             span.set_attribute("implement.status", "done")
             span.set_attribute("implement.pr_url", pr_url)
             log.info("Issue #%d done — PR: %s", number, pr_url)
@@ -122,6 +137,37 @@ def run(issue_url: str) -> None:
                 update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing",
                                                "retry_count": retry_count})
 
+
+
+def _checkout_wip_branch(repo_path, branch_name: str) -> None:
+    """Checkout an existing WIP branch if it exists (locally or on remote)."""
+    cwd = str(repo_path)
+
+    # Check local branch
+    result = subprocess.run(
+        ["git", "branch", "--list", branch_name],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        subprocess.run(["git", "checkout", branch_name], cwd=cwd, capture_output=True)
+        subprocess.run(["git", "pull", "origin", branch_name], cwd=cwd, capture_output=True)
+        log.info("Resumed WIP branch %s (local)", branch_name)
+        return
+
+    # Check remote branch
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", "origin", branch_name],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        subprocess.run(
+            ["git", "checkout", "-b", branch_name, f"origin/{branch_name}"],
+            cwd=cwd, capture_output=True,
+        )
+        log.info("Resumed WIP branch %s (remote)", branch_name)
+        return
+
+    log.info("No existing WIP branch %s found — starting fresh", branch_name)
 
 
 def _collect_discussion(all_comments, plan_comment_id: int) -> str:
