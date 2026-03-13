@@ -6,7 +6,10 @@ import pytest
 from github import GithubException
 
 from clayde.github import (
+    _has_blocking_references,
+    add_pr_reviewer,
     create_pull_request,
+    edit_comment,
     extract_branch_name,
     fetch_comment,
     fetch_issue,
@@ -14,7 +17,12 @@ from clayde.github import (
     find_open_pr,
     get_assigned_issues,
     get_default_branch,
+    get_issue_author,
+    get_pr_review_comments,
+    get_pr_reviews,
+    is_blocked,
     parse_issue_url,
+    parse_pr_url,
     post_comment,
 )
 
@@ -33,6 +41,18 @@ class TestParseIssueUrl:
     def test_pr_url_raises(self):
         with pytest.raises(ValueError):
             parse_issue_url("https://github.com/alice/repo/pull/1")
+
+
+class TestParsePrUrl:
+    def test_valid_url(self):
+        owner, repo, number = parse_pr_url("https://github.com/alice/myrepo/pull/5")
+        assert owner == "alice"
+        assert repo == "myrepo"
+        assert number == 5
+
+    def test_invalid_url_raises(self):
+        with pytest.raises(ValueError, match="Cannot parse PR URL"):
+            parse_pr_url("https://github.com/alice/repo/issues/1")
 
 
 class TestFetchIssue:
@@ -64,6 +84,14 @@ class TestPostComment:
         result = post_comment(g, "alice", "repo", 5, "hello")
         g.get_repo.return_value.get_issue.return_value.create_comment.assert_called_once_with("hello")
         assert result == 12345
+
+
+class TestEditComment:
+    def test_calls_edit(self):
+        g = MagicMock()
+        edit_comment(g, "alice", "repo", 5, 999, "new body")
+        g.get_repo.return_value.get_issue.return_value.get_comment.assert_called_once_with(999)
+        g.get_repo.return_value.get_issue.return_value.get_comment.return_value.edit.assert_called_once_with("new body")
 
 
 class TestFetchComment:
@@ -146,3 +174,171 @@ class TestCreatePullRequest:
             head="clayde/issue-5", base="main",
         )
         assert result == "https://github.com/alice/repo/pull/11"
+
+
+class TestIsBlocked:
+    def test_not_blocked_with_no_references(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.body = "Just a normal issue"
+        g.get_repo.return_value.get_issue.return_value = issue
+        g.auth = MagicMock()
+        g.auth.token = "tok"
+        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=False):
+            assert is_blocked(g, "o", "r", 1) is False
+
+    def test_blocked_by_open_issue_in_body(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.body = "This is blocked by #5"
+        ref_issue = MagicMock()
+        ref_issue.state = "open"
+
+        # get_repo called twice: once for the issue, once for the ref
+        repo_mock = MagicMock()
+        repo_mock.get_issue.side_effect = lambda n: issue if n == 1 else ref_issue
+        g.get_repo.return_value = repo_mock
+        g.auth = MagicMock()
+        g.auth.token = "tok"
+
+        assert is_blocked(g, "o", "r", 1) is True
+
+    def test_not_blocked_when_ref_is_closed(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.body = "This is blocked by #5"
+        ref_issue = MagicMock()
+        ref_issue.state = "closed"
+
+        repo_mock = MagicMock()
+        repo_mock.get_issue.side_effect = lambda n: issue if n == 1 else ref_issue
+        g.get_repo.return_value = repo_mock
+        g.auth = MagicMock()
+        g.auth.token = "tok"
+        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=False):
+            assert is_blocked(g, "o", "r", 1) is False
+
+    def test_not_blocked_with_no_body(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.body = None
+        g.get_repo.return_value.get_issue.return_value = issue
+        g.auth = MagicMock()
+        g.auth.token = "tok"
+        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=False):
+            assert is_blocked(g, "o", "r", 1) is False
+
+    def test_blocked_by_depends_on_pattern(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.body = "This depends on #10"
+        ref_issue = MagicMock()
+        ref_issue.state = "open"
+
+        repo_mock = MagicMock()
+        repo_mock.get_issue.side_effect = lambda n: issue if n == 1 else ref_issue
+        g.get_repo.return_value = repo_mock
+        g.auth = MagicMock()
+        g.auth.token = "tok"
+
+        assert is_blocked(g, "o", "r", 1) is True
+
+    def test_blocked_by_sub_issue_parent(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.body = "Normal issue"
+        g.get_repo.return_value.get_issue.return_value = issue
+        g.auth = MagicMock()
+        g.auth.token = "tok"
+        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=True):
+            assert is_blocked(g, "o", "r", 1) is True
+
+    def test_timeline_failure_does_not_block(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.body = "Normal issue"
+        g.get_repo.return_value.get_issue.return_value = issue
+        g.auth = MagicMock()
+        g.auth.token = "tok"
+        with patch("clayde.github._has_blocking_sub_issue_parents", side_effect=Exception("fail")):
+            # Should not raise, and should not block
+            assert is_blocked(g, "o", "r", 1) is False
+
+
+class TestHasBlockingReferences:
+    def test_same_repo_blocked_by(self):
+        g = MagicMock()
+        ref_issue = MagicMock()
+        ref_issue.state = "open"
+        g.get_repo.return_value.get_issue.return_value = ref_issue
+        assert _has_blocking_references(g, "o", "r", "blocked by #5") is True
+
+    def test_same_repo_depends_on(self):
+        g = MagicMock()
+        ref_issue = MagicMock()
+        ref_issue.state = "open"
+        g.get_repo.return_value.get_issue.return_value = ref_issue
+        assert _has_blocking_references(g, "o", "r", "depends on #5") is True
+
+    def test_cross_repo_blocked_by(self):
+        g = MagicMock()
+        ref_issue = MagicMock()
+        ref_issue.state = "open"
+        g.get_repo.return_value.get_issue.return_value = ref_issue
+        assert _has_blocking_references(g, "o", "r", "blocked by other/repo#3") is True
+        g.get_repo.assert_called_with("other/repo")
+
+    def test_closed_reference_not_blocking(self):
+        g = MagicMock()
+        ref_issue = MagicMock()
+        ref_issue.state = "closed"
+        g.get_repo.return_value.get_issue.return_value = ref_issue
+        assert _has_blocking_references(g, "o", "r", "blocked by #5") is False
+
+    def test_no_patterns(self):
+        g = MagicMock()
+        assert _has_blocking_references(g, "o", "r", "no blocking text here") is False
+
+    def test_github_exception_ignored(self):
+        g = MagicMock()
+        g.get_repo.return_value.get_issue.side_effect = GithubException(404, "not found", None)
+        assert _has_blocking_references(g, "o", "r", "blocked by #99") is False
+
+
+class TestAddPrReviewer:
+    def test_requests_review(self):
+        g = MagicMock()
+        add_pr_reviewer(g, "alice", "repo", 5, "bob")
+        g.get_repo.return_value.get_pull.assert_called_once_with(5)
+        g.get_repo.return_value.get_pull.return_value.create_review_request.assert_called_once_with(reviewers=["bob"])
+
+    def test_handles_failure_gracefully(self):
+        g = MagicMock()
+        g.get_repo.return_value.get_pull.side_effect = GithubException(422, "error", None)
+        # Should not raise
+        add_pr_reviewer(g, "alice", "repo", 5, "bob")
+
+
+class TestGetPrReviews:
+    def test_returns_reviews(self):
+        g = MagicMock()
+        reviews = [MagicMock(), MagicMock()]
+        g.get_repo.return_value.get_pull.return_value.get_reviews.return_value = reviews
+        result = get_pr_reviews(g, "alice", "repo", 5)
+        assert result == reviews
+
+
+class TestGetPrReviewComments:
+    def test_returns_review_comments(self):
+        g = MagicMock()
+        comments = [MagicMock()]
+        g.get_repo.return_value.get_pull.return_value.get_review_comments.return_value = comments
+        result = get_pr_review_comments(g, "alice", "repo", 5)
+        assert result == comments
+
+
+class TestGetIssueAuthor:
+    def test_returns_author_login(self):
+        g = MagicMock()
+        g.get_repo.return_value.get_issue.return_value.user.login = "alice"
+        assert get_issue_author(g, "o", "r", 1) == "alice"

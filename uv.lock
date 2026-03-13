@@ -183,6 +183,7 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "pydantic-settings" },
     { name = "pygithub" },
+    { name = "requests" },
 ]
 
 [package.optional-dependencies]
@@ -200,6 +201,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pygithub", specifier = ">=2.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "requests", specifier = ">=2.31" },
 ]
 provides-extras = ["dev"]
 

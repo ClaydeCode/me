@@ -1,0 +1,38 @@
+Research the following GitHub issue and produce a detailed implementation plan.
+
+ISSUE #{{ number }}: {{ title }}
+REPO: {{ owner }}/{{ repo }}
+LABELS: {{ labels }}
+
+ISSUE BODY:
+{{ body }}
+
+PRELIMINARY PLAN (already approved):
+{{ preliminary_plan_text }}
+
+DISCUSSION AFTER PRELIMINARY PLAN:
+{{ discussion_text }}
+
+REPOSITORY ON DISK: {{ repo_path }}
+
+Explore the repository to understand the codebase relevant to this issue.
+Pay special attention to agents.md files throughout.
+Then produce a thorough plan that includes:
+- Summary of what needs to be done and why
+- Files to create or modify (with specific locations)
+- Implementation approach and key decisions
+- Edge cases and risks
+- How to verify the implementation is correct
+
+At the end of your plan, include a branch name suggestion on its own line in
+exactly this format:
+
+**Branch:** `clayde/issue-{{ number }}-<slug>`
+
+where `<slug>` is a 1-to-3 word lowercase hyphenated description of the issue
+(e.g., `clayde/issue-13-better-branch-naming`). This MUST be present.
+
+If anything is ambiguous or you need clarification, include your questions
+at the end under a "Questions" section (before the branch name line).
+
+Output ONLY the plan in markdown format. No preamble, no wrapping.

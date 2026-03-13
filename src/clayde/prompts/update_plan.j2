@@ -1,0 +1,33 @@
+New comments have been posted on a GitHub issue you are working on. Review the
+new comments and update your plan accordingly.
+
+ISSUE #{{ number }}: {{ title }}
+REPO: {{ owner }}/{{ repo }}
+
+ISSUE BODY:
+{{ body }}
+
+CURRENT PLAN:
+{{ current_plan_text }}
+
+NEW COMMENTS SINCE LAST UPDATE:
+{{ new_comments_text }}
+
+REPOSITORY ON DISK: {{ repo_path }}
+
+Based on the new comments:
+1. Consider whether the current plan needs to be updated
+2. Answer any questions directed at you
+3. Incorporate any requested changes or clarifications
+
+Produce two outputs separated by the marker `---UPDATED_PLAN---`:
+
+FIRST: A short summary of what changed and your responses to any questions.
+This will be posted as a new comment.
+
+---UPDATED_PLAN---
+
+SECOND: The complete updated plan (the full plan text, not just the changes).
+This will replace the existing plan comment.
+
+Output ONLY these two sections. No preamble, no wrapping.
