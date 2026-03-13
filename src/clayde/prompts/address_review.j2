@@ -1,0 +1,28 @@
+A pull request you created has received review comments. Address the feedback
+and push updates to the branch.
+
+ISSUE #{{ number }}: {{ title }}
+REPO: {{ owner }}/{{ repo }}
+
+ISSUE BODY:
+{{ body }}
+
+PR BRANCH: {{ branch_name }}
+
+REVIEW COMMENTS:
+{{ review_text }}
+
+REPOSITORY ON DISK: {{ repo_path }}
+
+Steps:
+1. Check out the branch: git checkout {{ branch_name }} && git pull origin {{ branch_name }}
+2. Read and understand each review comment
+3. Make the requested changes
+4. Run tests if applicable
+5. Commit with a clear message referencing the review, e.g.: "Address review: <summary>"
+6. Push: git push origin {{ branch_name }}
+
+After making all changes, provide a short summary of what you changed in response
+to each review comment. This will be posted as a comment on the issue.
+
+Output ONLY the summary in markdown format. No preamble, no wrapping.

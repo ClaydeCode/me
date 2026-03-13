@@ -1,4 +1,8 @@
-"""Implement task — implement the approved plan, open PR, post result."""
+"""Implement task — implement the approved plan, open PR, assign reviewer.
+
+After implementation, assigns the issue author as PR reviewer and sets
+status to ``pr_open`` for review monitoring.
+"""
 
 import logging
 import subprocess
@@ -10,6 +14,7 @@ from clayde.claude import UsageLimitError, invoke_claude
 from clayde.config import DATA_DIR, get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
+    add_pr_reviewer,
     create_pull_request,
     extract_branch_name,
     fetch_comment,
@@ -17,9 +22,12 @@ from clayde.github import (
     fetch_issue_comments,
     find_open_pr,
     get_default_branch,
+    get_issue_author,
     parse_issue_url,
+    parse_pr_url,
     post_comment,
 )
+from clayde.safety import filter_comments
 from clayde.state import get_issue_state, update_issue_state
 from clayde.telemetry import get_tracer
 
@@ -48,10 +56,7 @@ def run(issue_url: str) -> None:
             existing_pr = find_open_pr(g, owner, repo, branch_name)
             if existing_pr:
                 log.info("Resuming interrupted #%d — found existing PR %s", number, existing_pr)
-                post_comment(g, owner, repo, number, f"Implementation complete — PR opened: {existing_pr}")
-                update_issue_state(issue_url, {"status": "done", "pr_url": existing_pr})
-                span.set_attribute("implement.status", "done")
-                span.set_attribute("implement.pr_url", existing_pr)
+                _assign_reviewer_and_finish(g, owner, repo, number, issue_url, existing_pr, span)
                 return
 
         update_issue_state(issue_url, {"status": "implementing"})
@@ -71,7 +76,8 @@ def run(issue_url: str) -> None:
             _checkout_wip_branch(repo_path, branch_name)
 
         all_comments = fetch_issue_comments(g, owner, repo, number)
-        discussion_text = _collect_discussion(all_comments, plan_comment_id)
+        visible_comments = filter_comments(all_comments)
+        discussion_text = _collect_discussion(visible_comments, plan_comment_id)
 
         prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
 
@@ -111,12 +117,8 @@ def run(issue_url: str) -> None:
                 log.error("Failed to create PR for #%d: %s", number, e)
 
         if pr_url:
-            _post_result(g, owner, repo, number, pr_url)
-            update_issue_state(issue_url, {"status": "done", "pr_url": pr_url})
+            _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span)
             log.info("Conversation saved to %s", conv_path)
-            span.set_attribute("implement.status", "done")
-            span.set_attribute("implement.pr_url", pr_url)
-            log.info("Issue #%d done — PR: %s", number, pr_url)
         else:
             log.error("Implementation of #%d produced no PR", number)
             log.error("Claude output (last 2000 chars): %s", (output or "")[-2000:])
@@ -137,6 +139,27 @@ def run(issue_url: str) -> None:
                 update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing",
                                                "retry_count": retry_count})
 
+
+def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span):
+    """Post result, assign reviewer, set status to pr_open."""
+    _post_result(g, owner, repo, number, pr_url)
+
+    # Assign the issue author as PR reviewer
+    try:
+        issue_author = get_issue_author(g, owner, repo, number)
+        _, _, pr_number = parse_pr_url(pr_url)
+        add_pr_reviewer(g, owner, repo, pr_number, issue_author)
+    except Exception as e:
+        log.warning("Failed to assign reviewer for PR %s: %s", pr_url, e)
+
+    update_issue_state(issue_url, {
+        "status": "pr_open",
+        "pr_url": pr_url,
+        "last_seen_review_id": 0,
+    })
+    span.set_attribute("implement.status", "pr_open")
+    span.set_attribute("implement.pr_url", pr_url)
+    log.info("Issue #%d PR open — monitoring for reviews: %s", number, pr_url)
 
 
 def _checkout_wip_branch(repo_path, branch_name: str) -> None:

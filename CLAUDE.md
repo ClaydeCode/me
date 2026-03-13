@@ -48,23 +48,34 @@ src/clayde/
   state.py              # load_state(), save_state(), get_issue_state(),
                         #   update_issue_state()
   github.py             # PyGitHub wrappers: parse_issue_url(), fetch_issue(),
-                        #   fetch_issue_comments(), post_comment(), fetch_comment(),
-                        #   get_default_branch(), get_assigned_issues(),
-                        #   extract_branch_name(), find_open_pr(), create_pull_request()
+                        #   fetch_issue_comments(), post_comment(), edit_comment(),
+                        #   fetch_comment(), get_default_branch(),
+                        #   get_assigned_issues(), extract_branch_name(),
+                        #   find_open_pr(), create_pull_request(), is_blocked(),
+                        #   add_pr_reviewer(), get_pr_reviews(),
+                        #   get_pr_review_comments(), parse_pr_url(),
+                        #   get_issue_author()
   git.py                # ensure_repo() — clone or update repos under REPOS_DIR
-  safety.py             # is_issue_authorized(), is_plan_approved() — safety gates
+  safety.py             # Content filtering & plan approval: is_comment_visible(),
+                        #   filter_comments(), is_issue_visible(),
+                        #   has_visible_content(), is_plan_approved()
   claude.py             # invoke_claude(prompt, repo_path) — Anthropic SDK with
                         #   tool-use loop (bash + text_editor)
   telemetry.py          # OpenTelemetry tracing: init_tracer(), get_tracer(),
                         #   FileSpanExporter (JSONL)
   orchestrator.py       # main() — single cycle, run_loop() — container entry point
   prompts/
-    plan.j2             # Jinja2 template for plan prompt
+    preliminary_plan.j2 # Jinja2 template for short preliminary plan
+    thorough_plan.j2    # Jinja2 template for detailed thorough plan
+    update_plan.j2      # Jinja2 template for updating a plan on new comments
     implement.j2        # Jinja2 template for implement prompt
+    address_review.j2   # Jinja2 template for addressing PR review comments
+    plan.j2             # Legacy template (kept for reference)
   tasks/
     __init__.py
-    plan.py             # run(issue_url) — research + post plan comment
-    implement.py        # run(issue_url) — implement + open PR + post result
+    plan.py             # run_preliminary(url), run_thorough(url), run_update(url, phase)
+    implement.py        # run(issue_url) — implement + open PR + assign reviewer
+    review.py           # run(issue_url) — address PR review comments
 
 # Container paths
 /opt/clayde/            # application code (WORKDIR)
@@ -102,32 +113,58 @@ Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at sta
 Issue lifecycle stored in `state.json` under `{"issues": {"<html_url>": {...}}}`.
 
 ```
-(none) → planning → awaiting_approval → implementing → done
-                                                     ↘ failed
+(none) → preliminary_planning → awaiting_preliminary_approval
+       → planning → awaiting_plan_approval → implementing → pr_open → done
+                                                                    ↘ failed
 ```
+
+New comments in `awaiting_preliminary_approval` or `awaiting_plan_approval`
+trigger plan updates (edit existing plan comment + post change summary).
+
+PR reviews in `pr_open` trigger `addressing_review` → back to `pr_open`.
 
 | Status | Meaning |
 |--------|---------|
-| `planning` | Claude is being invoked for the plan phase (skip in next cron tick) |
-| `awaiting_approval` | Plan posted as comment; waiting for 👍 |
-| `implementing` | Claude is being invoked for implementation (skip in next cron tick) |
-| `done` | PR opened; issue complete |
-| `failed` | Error during plan or implement; cleared manually to retry |
-| `interrupted` | Claude usage/rate limit hit mid-task; retried automatically each cron tick |
+| `preliminary_planning` | Claude is producing a short preliminary plan |
+| `awaiting_preliminary_approval` | Preliminary plan posted; waiting for 👍 |
+| `planning` | Claude is producing a thorough implementation plan |
+| `awaiting_plan_approval` | Thorough plan posted; waiting for 👍 |
+| `implementing` | Claude is implementing the approved plan |
+| `pr_open` | PR exists; monitoring for review comments |
+| `addressing_review` | Claude is addressing review comments |
+| `done` | PR approved or complete; issue finished |
+| `failed` | Error during any phase; cleared manually to retry |
+| `interrupted` | Claude usage/rate limit hit mid-task; retried automatically |
 
-State entries also store: `owner`, `repo`, `number`, `plan_comment_id`, `pr_url`, `branch_name`.
-Interrupted entries also store: `interrupted_phase` (`"planning"` or `"implementing"`).
+State entries store: `owner`, `repo`, `number`, `preliminary_comment_id`,
+`plan_comment_id`, `pr_url`, `branch_name`, `last_seen_comment_id`,
+`last_seen_review_id`.
+
+Interrupted entries also store: `interrupted_phase` (`"preliminary_planning"`,
+`"planning"`, `"implementing"`, or `"addressing_review"`).
+
+Backward compatibility: old `awaiting_approval` status is mapped to
+`awaiting_plan_approval`.
 
 ---
 
-## Safety Gates
+## Safety & Content Filtering
 
-Two independent checks must pass before any work begins:
+Instead of gatekeeping which issues to work on, content is **filtered** so
+the LLM only sees comments and issue bodies that are created by or approved
+(👍) by a whitelisted user. Every assigned issue is a candidate for work,
+but:
 
-1. **Issue-level gate** (before planning): issue must be created by a whitelisted user OR have a 👍 reaction from a whitelisted user on the issue itself.
-2. **Plan approval gate** (before implementation): the plan comment must have a 👍 reaction from any whitelisted user.
+1. **Blocked issues** are skipped — detected via "blocked by #N" / "depends
+   on #N" text patterns in the issue body, and via GitHub sub-issue
+   relationships (timeline API).
+2. **No visible content** → issue is skipped. If the issue body and all
+   comments are from non-whitelisted users without any whitelisted 👍, there
+   is nothing for the LLM to work with.
+3. **Plan approval gates** remain: preliminary plan needs 👍 to proceed to
+   thorough plan; thorough plan needs 👍 to proceed to implementation.
 
-Whitelisted users: configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env` (comma-separated).
+Whitelisted users: configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env`.
 
 ---
 
@@ -155,34 +192,76 @@ Uses PyGitHub. All functions accept a `Github` client instance as first argument
 Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 `git.ensure_repo()` clones on first use, then `git checkout <default_branch> && git pull` on subsequent calls.
 
+Key functions:
+- `is_blocked(g, owner, repo, number)` — checks body text patterns and timeline API for blocking relationships
+- `add_pr_reviewer(g, owner, repo, pr_number, login)` — requests a review on a PR
+- `get_pr_reviews()` / `get_pr_review_comments()` — fetch PR review data
+- `edit_comment()` — edit an existing issue comment
+- `parse_pr_url()` — parse PR URL into (owner, repo, pr_number)
+
 ---
 
 ## Safety Gates (`safety.py`)
 
-- `is_issue_authorized(issue)` — True if issue author is whitelisted OR a whitelisted user reacted +1.
+- `is_comment_visible(comment)` — True if comment author is whitelisted OR has 👍 from whitelisted user.
+- `filter_comments(comments)` — returns only visible comments.
+- `is_issue_visible(issue)` — True if issue author is whitelisted OR has 👍 from whitelisted user.
+- `has_visible_content(issue, comments)` — True if there is any visible content at all.
 - `is_plan_approved(g, owner, repo, number, comment_id)` — True if a whitelisted user reacted +1 to the plan comment.
 
 ---
 
 ## Plan Task (`tasks/plan.py`)
 
-1. Fetch issue metadata and comments via PyGitHub
+Two-phase planning with update support:
+
+### Phase 1: Preliminary Plan (`run_preliminary`)
+1. Fetch issue metadata and filtered comments
 2. `ensure_repo()` to have the code on disk
-3. Build prompt with issue body, labels, comments, repo path
-4. `invoke_claude()` — Claude explores the repo and returns a markdown plan
-5. Post plan as issue comment with instructions to react 👍 to approve
-6. Save `plan_comment_id` and set status → `awaiting_approval`
+3. Build prompt with filtered issue body, labels, visible comments, repo path
+4. `invoke_claude()` — Claude explores the repo and returns a short overview with questions
+5. Post preliminary plan as issue comment
+6. Set status → `awaiting_preliminary_approval`
+
+### Phase 2: Thorough Plan (`run_thorough`)
+1. Fetch preliminary plan comment and discussion after it
+2. Build prompt including preliminary plan + discussion
+3. `invoke_claude()` — Claude produces the full detailed plan
+4. Post thorough plan as issue comment
+5. Set status → `awaiting_plan_approval`
+
+### Plan Updates (`run_update`)
+Triggered when new visible comments are detected in `awaiting_preliminary_approval`
+or `awaiting_plan_approval` states:
+1. Fetch new visible comments since `last_seen_comment_id`
+2. Build update prompt with current plan + new comments
+3. `invoke_claude()` — Claude produces summary + updated plan
+4. **Edit** the existing plan comment AND **post** a new comment with change summary
 
 ---
 
 ## Implementation Task (`tasks/implement.py`)
 
-1. Fetch plan comment text and any discussion comments posted after the plan
+1. Fetch plan comment text and filtered discussion comments after the plan
 2. `ensure_repo()` to reset to latest default branch
 3. Build prompt with issue body, plan, discussion, repo path
-4. `invoke_claude()` — Claude creates a branch (`clayde/issue-{number}-{slug}`, where the slug is extracted from the plan), implements, commits, and pushes
-5. Python code creates PR via PyGitHub (`create_pull_request()`) or finds an existing one
-6. Post result comment on issue; set status → `done`
+4. `invoke_claude()` — Claude creates a branch, implements, commits, and pushes
+5. Python code creates PR via PyGitHub or finds an existing one
+6. **Assign the issue author as PR reviewer** via `add_pr_reviewer()`
+7. Post result comment on issue; set status → `pr_open`
+
+---
+
+## Review Task (`tasks/review.py`)
+
+Handles PR review comments after implementation:
+
+1. Fetch PR reviews and review comments via PyGitHub
+2. Filter to new reviews since `last_seen_review_id`, ignoring own reviews
+3. If reviews have comments/body: invoke Claude with `address_review.j2` prompt
+4. Claude makes changes and pushes to the existing branch
+5. Post summary comment on issue; update `last_seen_review_id`; status stays `pr_open`
+6. If a review is "APPROVED" with no comments: set status → `done`
 
 ---
 
@@ -190,7 +269,7 @@ Repo cloning convention: `repos/{owner}__{repo}/` (double underscore separator).
 
 Format: `[YYYY-MM-DD HH:MM:SS] [clayde.<module>] <message>`
 File: `/data/logs/agent.log` (appended)
-Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.github`, `clayde.claude`
+Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.tasks.review`, `clayde.github`, `clayde.claude`
 
 ---
 
