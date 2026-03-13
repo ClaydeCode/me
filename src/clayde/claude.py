@@ -1,5 +1,6 @@
 """Claude API invocation via the Anthropic Python SDK."""
 
+import json
 import logging
 import subprocess
 import time
@@ -117,7 +118,104 @@ def _execute_tool(block, cwd: str) -> str:
         return f"[error: unknown tool: {block.name}]"
 
 
-def invoke_claude(prompt: str, repo_path: str) -> str:
+def _commit_wip(repo_path: str, branch_name: str) -> None:
+    """Commit and push any working tree changes as WIP.
+
+    Never raises — failures are logged and swallowed so the original
+    error (e.g. rate limit) is not masked.
+    """
+    try:
+        cwd = repo_path
+        # Checkout or create the branch
+        result = subprocess.run(
+            ["git", "checkout", branch_name],
+            cwd=cwd, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            subprocess.run(
+                ["git", "checkout", "-b", branch_name],
+                cwd=cwd, capture_output=True, text=True, check=True,
+            )
+
+        subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True, check=True)
+
+        # Check if there are staged changes
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=cwd, capture_output=True,
+        )
+        if result.returncode == 0:
+            log.info("No changes to commit as WIP")
+            return
+
+        subprocess.run(
+            ["git", "commit", "-m", "WIP: interrupted by rate limit"],
+            cwd=cwd, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "push", "--force", "origin", branch_name],
+            cwd=cwd, capture_output=True, check=True,
+        )
+        log.info("WIP committed and pushed to %s", branch_name)
+    except Exception as e:
+        log.warning("Failed to commit WIP: %s", e)
+
+
+def _serialize_messages(messages: list) -> list:
+    """Serialize messages for JSON persistence.
+
+    Assistant messages contain Anthropic SDK pydantic content blocks
+    that need .model_dump(). User messages are already plain dicts.
+    """
+    serialized = []
+    for msg in messages:
+        if msg["role"] == "assistant":
+            content = msg["content"]
+            if isinstance(content, list):
+                dumped = []
+                for block in content:
+                    if hasattr(block, "model_dump"):
+                        dumped.append(block.model_dump())
+                    else:
+                        dumped.append(block)
+                serialized.append({"role": "assistant", "content": dumped})
+            else:
+                serialized.append(msg)
+        else:
+            serialized.append(msg)
+    return serialized
+
+
+def _save_conversation(conversation_path: Path, messages: list) -> None:
+    """Save conversation messages to a JSON file."""
+    try:
+        conversation_path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = _serialize_messages(messages)
+        conversation_path.write_text(json.dumps(serialized, default=str))
+        log.info("Saved conversation (%d messages) to %s", len(messages), conversation_path)
+    except Exception as e:
+        log.warning("Failed to save conversation: %s", e)
+
+
+def _load_conversation(conversation_path: Path) -> list | None:
+    """Load conversation messages from a JSON file. Returns None if not found."""
+    try:
+        if conversation_path.exists():
+            messages = json.loads(conversation_path.read_text())
+            log.info("Loaded conversation (%d messages) from %s", len(messages), conversation_path)
+            return messages
+    except Exception as e:
+        log.warning("Failed to load conversation: %s", e)
+    return None
+
+
+def invoke_claude(
+    prompt: str,
+    repo_path: str,
+    *,
+    branch_name: str | None = None,
+    conversation_path: Path | None = None,
+) -> str:
     """Invoke the Claude API with the given prompt.
 
     Uses tool-use mode (bash + text_editor) so Claude can explore and
@@ -126,6 +224,10 @@ def invoke_claude(prompt: str, repo_path: str) -> str:
     Args:
         prompt: The user prompt to send to Claude.
         repo_path: Path to the repository (used as cwd for tool execution).
+        branch_name: If provided, WIP changes are committed to this branch
+            on rate limit interruption.
+        conversation_path: If provided, conversation is saved to this path
+            on interruption and resumed from it on next invocation.
 
     Raises:
         UsageLimitError: When the Claude API reports a rate/usage limit.
@@ -147,7 +249,25 @@ def invoke_claude(prompt: str, repo_path: str) -> str:
                 {"type": "bash_20250124", "name": "bash"},
                 {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
             ]
-            messages = [{"role": "user", "content": prompt}]
+
+            # Try to resume from a saved conversation
+            resumed = False
+            if conversation_path:
+                saved = _load_conversation(conversation_path)
+                if saved:
+                    messages = saved
+                    messages.append({"role": "user", "content":
+                        "You were interrupted by a rate limit. Your previous edits have been "
+                        "preserved on the branch. Continue where you left off."})
+                    resumed = True
+                    span.set_attribute("claude.resumed", True)
+                    span.set_attribute("claude.resumed_messages", len(saved))
+                    log.info("Resuming conversation with %d existing messages", len(saved))
+
+            if not resumed:
+                messages = [{"role": "user", "content": prompt}]
+                span.set_attribute("claude.resumed", False)
+
             deadline = time.monotonic() + 1800
             turn_count = 0
             output = ""
@@ -204,6 +324,10 @@ def invoke_claude(prompt: str, repo_path: str) -> str:
 
         except anthropic.RateLimitError as e:
             log.error("Claude API rate limit hit: %s", e)
+            if branch_name:
+                _commit_wip(repo_path, branch_name)
+            if conversation_path:
+                _save_conversation(conversation_path, messages)
             span.set_attribute("claude.usage_limit", True)
             exc = UsageLimitError(f"Claude API rate limit: {e}")
             span.record_exception(exc)
@@ -212,6 +336,10 @@ def invoke_claude(prompt: str, repo_path: str) -> str:
         except anthropic.APIStatusError as e:
             if e.status_code == 529:
                 log.error("Claude API overloaded (529): %s", e)
+                if branch_name:
+                    _commit_wip(repo_path, branch_name)
+                if conversation_path:
+                    _save_conversation(conversation_path, messages)
                 span.set_attribute("claude.usage_limit", True)
                 exc = UsageLimitError(f"Claude API overloaded: {e}")
                 span.record_exception(exc)

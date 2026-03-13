@@ -1,9 +1,11 @@
 """Tests for clayde.tasks.implement."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from clayde.claude import UsageLimitError
 from clayde.tasks.implement import (
+    _checkout_wip_branch,
     _collect_discussion,
     _post_result,
     run,
@@ -59,7 +61,7 @@ class TestPostResult:
 
 
 class TestRun:
-    def test_full_success_creates_pr(self):
+    def test_full_success_creates_pr(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
              patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
@@ -73,7 +75,8 @@ class TestRun:
              patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
              patch("clayde.tasks.implement.create_pull_request", return_value="https://github.com/o/r/pull/5") as mock_cpr, \
-             patch("clayde.tasks.implement._post_result"):
+             patch("clayde.tasks.implement._post_result"), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test issue"
             run("https://github.com/o/r/issues/1")
@@ -83,7 +86,7 @@ class TestRun:
         assert last_call[0][1]["status"] == "done"
         assert last_call[0][1]["pr_url"] == "https://github.com/o/r/pull/5"
 
-    def test_existing_pr_reused(self):
+    def test_existing_pr_reused(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
              patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
@@ -97,7 +100,8 @@ class TestRun:
              patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
              patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
              patch("clayde.tasks.implement.create_pull_request") as mock_cpr, \
-             patch("clayde.tasks.implement._post_result"):
+             patch("clayde.tasks.implement._post_result"), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             run("https://github.com/o/r/issues/1")
 
@@ -106,7 +110,7 @@ class TestRun:
         assert last_call[0][1]["status"] == "done"
         assert last_call[0][1]["pr_url"] == "https://github.com/o/r/pull/5"
 
-    def test_usage_limit_sets_interrupted(self):
+    def test_usage_limit_sets_interrupted(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client"), \
              patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
@@ -117,7 +121,8 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", side_effect=UsageLimitError("limit")):
+             patch("clayde.tasks.implement.invoke_claude", side_effect=UsageLimitError("limit")), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             run("url")
 
@@ -139,7 +144,7 @@ class TestRun:
 
         mock_update.assert_called_once_with("url", {"status": "done", "pr_url": "https://github.com/o/r/pull/5"})
 
-    def test_pr_creation_failure_sets_interrupted(self):
+    def test_pr_creation_failure_sets_interrupted(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
              patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
@@ -153,7 +158,8 @@ class TestRun:
              patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
              patch("clayde.tasks.implement.create_pull_request", side_effect=Exception("API error")), \
-             patch("clayde.tasks.implement.post_comment"):
+             patch("clayde.tasks.implement.post_comment"), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test issue"
             run("https://github.com/o/r/issues/1")
@@ -163,7 +169,7 @@ class TestRun:
         assert last_call[0][1]["interrupted_phase"] == "implementing"
         assert last_call[0][1]["retry_count"] == 1
 
-    def test_no_pr_fails_after_max_retries(self):
+    def test_no_pr_fails_after_max_retries(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
              patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100, "retry_count": 2}), \
@@ -177,7 +183,8 @@ class TestRun:
              patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
              patch("clayde.tasks.implement.create_pull_request", side_effect=Exception("API error")), \
-             patch("clayde.tasks.implement.post_comment"):
+             patch("clayde.tasks.implement.post_comment"), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test issue"
             run("https://github.com/o/r/issues/1")
@@ -202,3 +209,133 @@ class TestRun:
         assert "/tmp/repo" in prompt
         assert "42" in prompt
         assert "clayde/issue-42-test-branch" in prompt
+
+    def test_conversation_path_passed_to_invoke_claude(self):
+        with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
+             patch("clayde.tasks.implement.update_issue_state"), \
+             patch("clayde.tasks.implement.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value="done") as mock_claude, \
+             patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
+             patch("clayde.tasks.implement._post_result"), \
+             patch("clayde.tasks.implement.DATA_DIR", Path("/tmp/test-data")):
+            mock_fc.return_value.body = "plan text"
+            mock_fi.return_value.title = "Test"
+            run("https://github.com/o/r/issues/1")
+
+        call_kwargs = mock_claude.call_args
+        assert call_kwargs.kwargs["branch_name"] is not None
+        assert call_kwargs.kwargs["conversation_path"] is not None
+        assert "o__r__issue-1" in str(call_kwargs.kwargs["conversation_path"])
+
+    def test_conversation_preserved_on_success(self, tmp_path):
+        conv_dir = tmp_path / "conversations"
+        conv_dir.mkdir()
+        conv_file = conv_dir / "o__r__issue-1.json"
+        conv_file.write_text("[]")
+
+        with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
+             patch("clayde.tasks.implement.update_issue_state"), \
+             patch("clayde.tasks.implement.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value="done"), \
+             patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
+             patch("clayde.tasks.implement._post_result"), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
+            mock_fc.return_value.body = "plan text"
+            mock_fi.return_value.title = "Test"
+            run("https://github.com/o/r/issues/1")
+
+        assert conv_file.exists()
+
+    def test_resumed_issue_checks_out_wip_branch(self):
+        state = {
+            "plan_comment_id": 100,
+            "status": "interrupted",
+            "branch_name": "clayde/issue-1-fix",
+        }
+        with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value=state), \
+             patch("clayde.tasks.implement.find_open_pr", return_value=None), \
+             patch("clayde.tasks.implement.update_issue_state"), \
+             patch("clayde.tasks.implement.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value="done"), \
+             patch("clayde.tasks.implement.create_pull_request", return_value="https://github.com/o/r/pull/5"), \
+             patch("clayde.tasks.implement._post_result"), \
+             patch("clayde.tasks.implement._checkout_wip_branch") as mock_checkout, \
+             patch("clayde.tasks.implement.DATA_DIR", Path("/tmp/test-data")):
+            mock_fc.return_value.body = "plan text"
+            mock_fi.return_value.title = "Test"
+            run("https://github.com/o/r/issues/1")
+
+        mock_checkout.assert_called_once_with("/tmp/repo", "clayde/issue-1-fix")
+
+
+class TestCheckoutWipBranch:
+    def test_checks_out_local_branch(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            if cmd == ["git", "branch", "--list", "clayde/issue-1"]:
+                result.stdout = "  clayde/issue-1\n"
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("clayde.tasks.implement.subprocess.run", side_effect=fake_run):
+            _checkout_wip_branch("/repo", "clayde/issue-1")
+
+        cmd_strs = [" ".join(c) for c in calls]
+        assert any("checkout clayde/issue-1" in s for s in cmd_strs)
+
+    def test_checks_out_remote_branch(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0
+            if cmd == ["git", "branch", "--list", "clayde/issue-1"]:
+                result.stdout = ""  # not local
+            elif "ls-remote" in cmd:
+                result.stdout = "abc123\trefs/heads/clayde/issue-1\n"
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("clayde.tasks.implement.subprocess.run", side_effect=fake_run):
+            _checkout_wip_branch("/repo", "clayde/issue-1")
+
+        cmd_strs = [" ".join(c) for c in calls]
+        assert any("checkout -b clayde/issue-1 origin/clayde/issue-1" in s for s in cmd_strs)
+
+    def test_no_branch_found_does_nothing(self):
+        def fake_run(cmd, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            return result
+
+        with patch("clayde.tasks.implement.subprocess.run", side_effect=fake_run):
+            _checkout_wip_branch("/repo", "clayde/issue-1")  # Should not raise

@@ -1,5 +1,6 @@
 """Tests for clayde.claude."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -9,7 +10,11 @@ import anthropic
 from clayde.claude import (
     UsageLimitError,
     _calculate_cost_usd,
+    _commit_wip,
     _execute_tool,
+    _load_conversation,
+    _save_conversation,
+    _serialize_messages,
     invoke_claude,
     is_claude_available,
 )
@@ -318,3 +323,183 @@ class TestIsClaudeAvailable:
         with patch("clayde.claude._get_client", return_value=mock_client), \
              patch("clayde.claude.get_settings", return_value=_mock_settings("/tmp")):
             assert is_claude_available() is True
+
+
+class TestCommitWip:
+    def test_commits_and_pushes_changes(self, tmp_path):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = MagicMock()
+            # git checkout branch_name fails (doesn't exist)
+            if cmd == ["git", "checkout", "clayde/issue-1"]:
+                result.returncode = 1
+                return result
+            # git diff --cached --quiet returns 1 (has changes)
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                result.returncode = 1
+                return result
+            result.returncode = 0
+            return result
+
+        with patch("clayde.claude.subprocess.run", side_effect=fake_run):
+            _commit_wip("/repo", "clayde/issue-1")
+
+        cmd_strs = [" ".join(c) for c in calls]
+        assert any("checkout -b clayde/issue-1" in s for s in cmd_strs)
+        assert any("add -A" in s for s in cmd_strs)
+        assert any("commit -m" in s for s in cmd_strs)
+        assert any("push --force origin clayde/issue-1" in s for s in cmd_strs)
+
+    def test_skips_commit_when_no_changes(self, tmp_path):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = MagicMock()
+            result.returncode = 0  # git diff --cached --quiet returns 0 (no changes)
+            return result
+
+        with patch("clayde.claude.subprocess.run", side_effect=fake_run):
+            _commit_wip("/repo", "clayde/issue-1")
+
+        cmd_strs = [" ".join(c) for c in calls]
+        assert not any("commit" in s for s in cmd_strs)
+
+    def test_never_raises(self):
+        with patch("clayde.claude.subprocess.run", side_effect=OSError("fail")):
+            # Should not raise
+            _commit_wip("/repo", "branch")
+
+
+class TestConversationPersistence:
+    def test_serialize_messages_with_pydantic_blocks(self):
+        mock_block = MagicMock()
+        mock_block.model_dump.return_value = {"type": "text", "text": "hello"}
+
+        messages = [
+            {"role": "user", "content": "prompt"},
+            {"role": "assistant", "content": [mock_block]},
+        ]
+        result = _serialize_messages(messages)
+        assert result[0] == {"role": "user", "content": "prompt"}
+        assert result[1] == {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}
+        mock_block.model_dump.assert_called_once()
+
+    def test_serialize_messages_with_plain_dicts(self):
+        messages = [
+            {"role": "user", "content": "prompt"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ]
+        result = _serialize_messages(messages)
+        assert result == messages
+
+    def test_save_and_load_conversation(self, tmp_path):
+        conv_path = tmp_path / "conv.json"
+        messages = [
+            {"role": "user", "content": "prompt"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ]
+        _save_conversation(conv_path, messages)
+        loaded = _load_conversation(conv_path)
+        assert loaded == messages
+
+    def test_load_nonexistent_returns_none(self, tmp_path):
+        assert _load_conversation(tmp_path / "missing.json") is None
+
+    def test_save_creates_parent_dirs(self, tmp_path):
+        conv_path = tmp_path / "sub" / "dir" / "conv.json"
+        _save_conversation(conv_path, [{"role": "user", "content": "test"}])
+        assert conv_path.exists()
+
+    def test_rate_limit_saves_conversation(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"
+
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.side_effect = anthropic.RateLimitError(
+            message="rate limit", response=MagicMock(), body={}
+        )
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
+             patch("clayde.claude._get_client", return_value=mock_client), \
+             patch("clayde.claude._commit_wip") as mock_wip:
+            with pytest.raises(UsageLimitError):
+                invoke_claude("prompt", "/repo", branch_name="branch", conversation_path=conv_path)
+
+        assert conv_path.exists()
+        saved = json.loads(conv_path.read_text())
+        assert len(saved) == 1
+        assert saved[0]["role"] == "user"
+        mock_wip.assert_called_once_with("/repo", "branch")
+
+    def test_rate_limit_529_saves_conversation(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"
+
+        mock_response_obj = MagicMock()
+        mock_response_obj.status_code = 529
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.side_effect = anthropic.APIStatusError(
+            message="overloaded", response=mock_response_obj, body={}
+        )
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
+             patch("clayde.claude._get_client", return_value=mock_client), \
+             patch("clayde.claude._commit_wip"):
+            with pytest.raises(UsageLimitError):
+                invoke_claude("prompt", "/repo", branch_name="b", conversation_path=conv_path)
+
+        assert conv_path.exists()
+
+    def test_resumes_from_saved_conversation(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"
+
+        # Save a prior conversation
+        prior_messages = [
+            {"role": "user", "content": "original prompt"},
+            {"role": "assistant", "content": [{"type": "text", "text": "working on it"}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        ]
+        conv_path.write_text(json.dumps(prior_messages))
+
+        end_response = _make_end_turn_response("resumed output")
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.return_value = end_response
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
+             patch("clayde.claude._get_client", return_value=mock_client):
+            result = invoke_claude("new prompt", str(tmp_path), conversation_path=conv_path)
+
+        assert result == "resumed output"
+        # Check the first call's messages (before the loop mutates it)
+        first_call = mock_client.beta.messages.create.call_args_list[0]
+        messages_sent = first_call.kwargs["messages"]
+        # 3 prior + 1 resume + 1 assistant appended by loop = 5, but we check
+        # the resume message was at index 3 before the call
+        assert any("interrupted" in str(m.get("content", "")).lower() for m in messages_sent if m["role"] == "user")
+
+    def test_no_resume_without_conversation_file(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"  # Does not exist
+
+        end_response = _make_end_turn_response("fresh output")
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.return_value = end_response
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
+             patch("clayde.claude._get_client", return_value=mock_client):
+            result = invoke_claude("prompt", str(tmp_path), conversation_path=conv_path)
+
+        assert result == "fresh output"
+        first_call = mock_client.beta.messages.create.call_args_list[0]
+        messages_sent = first_call.kwargs["messages"]
+        # First message should be the user prompt, second is the assistant response appended by the loop
+        assert messages_sent[0]["content"] == "prompt"
+        assert messages_sent[0]["role"] == "user"
