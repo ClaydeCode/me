@@ -1,5 +1,6 @@
 """Claude API invocation via the Anthropic Python SDK."""
 
+import dataclasses
 import json
 import logging
 import subprocess
@@ -30,8 +31,27 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
 _EUR_PER_USD = 0.92
 
 
+@dataclasses.dataclass
+class InvocationResult:
+    """Result of a Claude invocation, including output text and cost."""
+
+    output: str
+    cost_eur: float
+    input_tokens: int
+    output_tokens: int
+
+
 class UsageLimitError(Exception):
     """Raised when Claude API reports a usage/rate limit."""
+
+    def __init__(self, message: str, cost_eur: float = 0.0):
+        super().__init__(message)
+        self.cost_eur = cost_eur
+
+
+def format_cost_line(cost_eur: float) -> str:
+    """Format a cost line for inclusion in GitHub comments."""
+    return f"\n\n💸 This task cost {cost_eur:.2f}€"
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -215,7 +235,7 @@ def invoke_claude(
     *,
     branch_name: str | None = None,
     conversation_path: Path | None = None,
-) -> str:
+) -> InvocationResult:
     """Invoke the Claude API with the given prompt.
 
     Uses tool-use mode (bash + text_editor) so Claude can explore and
@@ -229,8 +249,12 @@ def invoke_claude(
         conversation_path: If provided, conversation is saved to this path
             on interruption and resumed from it on next invocation.
 
+    Returns:
+        InvocationResult with the output text and cost information.
+
     Raises:
         UsageLimitError: When the Claude API reports a rate/usage limit.
+            The exception carries ``cost_eur`` for partial cost accumulation.
     """
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.invoke_claude") as span:
@@ -328,8 +352,10 @@ def invoke_claude(
                 _commit_wip(repo_path, branch_name)
             if conversation_path:
                 _save_conversation(conversation_path, messages)
+            partial_cost_usd = _calculate_cost_usd(model, total_input_tokens, total_output_tokens)
+            partial_cost_eur = partial_cost_usd * _EUR_PER_USD
             span.set_attribute("claude.usage_limit", True)
-            exc = UsageLimitError(f"Claude API rate limit: {e}")
+            exc = UsageLimitError(f"Claude API rate limit: {e}", cost_eur=partial_cost_eur)
             span.record_exception(exc)
             raise exc from e
 
@@ -340,8 +366,10 @@ def invoke_claude(
                     _commit_wip(repo_path, branch_name)
                 if conversation_path:
                     _save_conversation(conversation_path, messages)
+                partial_cost_usd = _calculate_cost_usd(model, total_input_tokens, total_output_tokens)
+                partial_cost_eur = partial_cost_usd * _EUR_PER_USD
                 span.set_attribute("claude.usage_limit", True)
-                exc = UsageLimitError(f"Claude API overloaded: {e}")
+                exc = UsageLimitError(f"Claude API overloaded: {e}", cost_eur=partial_cost_eur)
                 span.record_exception(exc)
                 raise exc from e
             log.error("Claude API error %d: %s", e.status_code, e)
@@ -350,15 +378,21 @@ def invoke_claude(
 
         # Record usage metrics
         cost_usd = _calculate_cost_usd(model, total_input_tokens, total_output_tokens)
+        cost_eur = cost_usd * _EUR_PER_USD
         span.set_attribute("claude.input_tokens", total_input_tokens)
         span.set_attribute("claude.output_tokens", total_output_tokens)
         span.set_attribute("claude.cost_usd", cost_usd)
-        span.set_attribute("claude.cost_eur", cost_usd * _EUR_PER_USD)
+        span.set_attribute("claude.cost_eur", cost_eur)
         span.set_attribute("claude.output_length", len(output))
         span.set_attribute("claude.timeout", False)
         span.set_attribute("claude.usage_limit", False)
 
-        return output
+        return InvocationResult(
+            output=output,
+            cost_eur=cost_eur,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+        )
 
 
 def _set_ratelimit_attributes(span, response) -> None:

@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from clayde.claude import UsageLimitError
+from clayde.claude import InvocationResult, UsageLimitError
 from clayde.tasks.plan import (
     _build_preliminary_prompt,
     _build_thorough_prompt,
@@ -15,6 +15,11 @@ from clayde.tasks.plan import (
     run_thorough,
     run_update,
 )
+
+
+def _make_result(output: str, cost_eur: float = 0.50) -> InvocationResult:
+    """Helper to create an InvocationResult for testing."""
+    return InvocationResult(output=output, cost_eur=cost_eur, input_tokens=100, output_tokens=50)
 
 
 def _mock_settings(users=None):
@@ -142,6 +147,17 @@ class TestPostPreliminaryComment:
         assert "My preliminary plan" in posted_body
         assert "\U0001f44d" in posted_body
         assert "preliminary" in posted_body.lower()
+        assert "💸 This task cost 0.00€" in posted_body
+
+    def test_posts_with_cost(self):
+        g = MagicMock()
+        mock_comment = MagicMock()
+        mock_comment.id = 555
+        g.get_repo.return_value.get_issue.return_value.create_comment.return_value = mock_comment
+
+        result = _post_preliminary_comment(g, "owner", "repo", 1, "plan", cost_eur=1.23)
+        posted_body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
+        assert "💸 This task cost 1.23€" in posted_body
 
 
 class TestPostThoroughPlanComment:
@@ -157,6 +173,17 @@ class TestPostThoroughPlanComment:
         assert "## Implementation Plan" in posted_body
         assert "My thorough plan" in posted_body
         assert "\U0001f44d" in posted_body
+        assert "💸 This task cost 0.00€" in posted_body
+
+    def test_posts_with_cost(self):
+        g = MagicMock()
+        mock_comment = MagicMock()
+        mock_comment.id = 666
+        g.get_repo.return_value.get_issue.return_value.create_comment.return_value = mock_comment
+
+        result = _post_thorough_plan_comment(g, "owner", "repo", 1, "plan", cost_eur=3.45)
+        posted_body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
+        assert "💸 This task cost 3.45€" in posted_body
 
 
 class TestCollectDiscussionAfter:
@@ -213,9 +240,10 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value="x" * 150), \
-             patch("clayde.tasks.plan._post_preliminary_comment", return_value=999), \
-             patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]):
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("x" * 150, cost_eur=1.00)), \
+             patch("clayde.tasks.plan._post_preliminary_comment", return_value=999) as mock_post, \
+             patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
+             patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
             run_preliminary("https://github.com/o/r/issues/1")
 
         calls = mock_update.call_args_list
@@ -225,6 +253,10 @@ class TestRunPreliminary:
         assert last["status"] == "awaiting_preliminary_approval"
         assert last["preliminary_comment_id"] == 999
         assert last["last_seen_comment_id"] == 500
+        # Cost is passed to the comment helper
+        mock_post.assert_called_once()
+        assert mock_post.call_args[0][4] == "x" * 150
+        assert mock_post.call_args[0][5] == 1.00
 
     def test_empty_plan_sets_failed(self):
         with patch("clayde.tasks.plan.get_github_client"), \
@@ -234,13 +266,14 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value="  "):
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("  ")), \
+             patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
             run_preliminary("url")
 
         last_call = mock_update.call_args_list[-1]
         assert last_call[0][1]["status"] == "failed"
 
-    def test_usage_limit_sets_interrupted(self):
+    def test_usage_limit_sets_interrupted_and_accumulates_cost(self):
         with patch("clayde.tasks.plan.get_github_client"), \
              patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.plan.update_issue_state") as mock_update, \
@@ -248,12 +281,35 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", side_effect=UsageLimitError("limit")):
+             patch("clayde.tasks.plan.invoke_claude", side_effect=UsageLimitError("limit", cost_eur=0.75)), \
+             patch("clayde.tasks.plan.accumulate_cost") as mock_accum:
             run_preliminary("url")
 
         last_call = mock_update.call_args_list[-1]
         assert last_call[0][1]["status"] == "interrupted"
         assert last_call[0][1]["interrupted_phase"] == "preliminary_planning"
+        mock_accum.assert_called_once_with("url", 0.75)
+
+    def test_accumulated_cost_included_on_success(self):
+        """Cost from prior interrupted runs is included in the total."""
+        mock_comment = MagicMock()
+        mock_comment.id = 500
+
+        with patch("clayde.tasks.plan.get_github_client"), \
+             patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.plan.update_issue_state"), \
+             patch("clayde.tasks.plan.fetch_issue"), \
+             patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("x" * 150, cost_eur=1.00)), \
+             patch("clayde.tasks.plan._post_preliminary_comment", return_value=999) as mock_post, \
+             patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
+             patch("clayde.tasks.plan.pop_accumulated_cost", return_value=2.00):
+            run_preliminary("url")
+
+        # Total cost should be accumulated (2.00) + current (1.00) = 3.00
+        assert mock_post.call_args[0][5] == 3.00
 
 
 class TestRunThorough:
@@ -272,8 +328,9 @@ class TestRunThorough:
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
              patch("clayde.tasks.plan.filter_comments", return_value=[]), \
              patch("clayde.tasks.plan._build_thorough_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value="x" * 250), \
-             patch("clayde.tasks.plan._post_thorough_plan_comment", return_value=888):
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("x" * 250, cost_eur=2.00)), \
+             patch("clayde.tasks.plan._post_thorough_plan_comment", return_value=888) as mock_post, \
+             patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
             mock_fc.return_value.body = "preliminary plan"
             mock_fi.return_value.labels = []
             run_thorough("https://github.com/o/r/issues/1")
@@ -283,8 +340,10 @@ class TestRunThorough:
         last = calls[-1][0][1]
         assert last["status"] == "awaiting_plan_approval"
         assert last["plan_comment_id"] == 888
+        # Cost is passed
+        assert mock_post.call_args[0][5] == 2.00
 
-    def test_usage_limit_sets_interrupted(self):
+    def test_usage_limit_sets_interrupted_and_accumulates_cost(self):
         with patch("clayde.tasks.plan.get_github_client"), \
              patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.plan.update_issue_state") as mock_update, \
@@ -296,17 +355,19 @@ class TestRunThorough:
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.plan.filter_comments", return_value=[]), \
              patch("clayde.tasks.plan._build_thorough_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", side_effect=UsageLimitError("limit")):
+             patch("clayde.tasks.plan.invoke_claude", side_effect=UsageLimitError("limit", cost_eur=1.50)), \
+             patch("clayde.tasks.plan.accumulate_cost") as mock_accum:
             mock_fc.return_value.body = "plan"
             run_thorough("url")
 
         last_call = mock_update.call_args_list[-1]
         assert last_call[0][1]["status"] == "interrupted"
         assert last_call[0][1]["interrupted_phase"] == "planning"
+        mock_accum.assert_called_once_with("url", 1.50)
 
 
 class TestRunUpdate:
-    def test_updates_plan_and_posts_summary(self):
+    def test_updates_plan_and_posts_summary_with_cost(self):
         new_comment = MagicMock()
         new_comment.id = 300
         new_comment.user.login = "alice"
@@ -332,10 +393,12 @@ class TestRunUpdate:
              ]), \
              patch("clayde.tasks.plan.filter_comments", return_value=[new_comment]), \
              patch("clayde.tasks.plan.is_issue_visible", return_value=True), \
-             patch("clayde.tasks.plan.invoke_claude", return_value="Summary\n---UPDATED_PLAN---\nUpdated plan text"), \
+             patch("clayde.tasks.plan.invoke_claude",
+                   return_value=_make_result("Summary\n---UPDATED_PLAN---\nUpdated plan text", cost_eur=0.80)), \
              patch("clayde.tasks.plan.edit_comment") as mock_edit, \
              patch("clayde.tasks.plan.post_comment") as mock_post, \
-             patch("clayde.tasks.plan.update_issue_state") as mock_update:
+             patch("clayde.tasks.plan.update_issue_state") as mock_update, \
+             patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
             mock_fc.return_value.body = "current plan"
             mock_fi.return_value.body = "issue body"
             mock_fi.return_value.title = "Title"
@@ -345,6 +408,39 @@ class TestRunUpdate:
         mock_post.assert_called_once()
         posted_body = mock_post.call_args[0][4]
         assert "Plan updated" in posted_body
+        assert "💸 This task cost 0.80€" in posted_body
+
+    def test_usage_limit_accumulates_cost(self):
+        new_comment = MagicMock()
+        new_comment.id = 300
+        new_comment.user.login = "alice"
+        new_comment.body = "change something"
+
+        with patch("clayde.tasks.plan.get_github_client"), \
+             patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.state.get_issue_state", return_value={
+                 "preliminary_comment_id": 100,
+                 "last_seen_comment_id": 200,
+             }), \
+             patch("clayde.tasks.plan.get_settings", return_value=_mock_settings()), \
+             patch("clayde.tasks.plan.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.plan.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.plan.fetch_issue_comments", return_value=[new_comment]), \
+             patch("clayde.tasks.plan.filter_comments", return_value=[new_comment]), \
+             patch("clayde.tasks.plan.is_issue_visible", return_value=True), \
+             patch("clayde.tasks.plan.invoke_claude", side_effect=UsageLimitError("limit", cost_eur=0.30)), \
+             patch("clayde.tasks.plan.update_issue_state") as mock_update, \
+             patch("clayde.tasks.plan.accumulate_cost") as mock_accum:
+            mock_fc.return_value.body = "plan"
+            mock_fi.return_value.body = "body"
+            mock_fi.return_value.title = "Title"
+            run_update("url", "preliminary")
+
+        mock_accum.assert_called_once_with("url", 0.30)
+        last_call = mock_update.call_args_list[-1]
+        assert last_call[0][1]["status"] == "interrupted"
 
     def test_skips_when_no_new_comments(self):
         old_comment = MagicMock()

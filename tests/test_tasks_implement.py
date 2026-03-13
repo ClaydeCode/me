@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from clayde.claude import UsageLimitError
+from clayde.claude import InvocationResult, UsageLimitError
 from clayde.tasks.implement import (
     _assign_reviewer_and_finish,
     _checkout_wip_branch,
@@ -11,6 +11,11 @@ from clayde.tasks.implement import (
     _post_result,
     run,
 )
+
+
+def _make_result(output: str, cost_eur: float = 0.50) -> InvocationResult:
+    """Helper to create an InvocationResult for testing."""
+    return InvocationResult(output=output, cost_eur=cost_eur, input_tokens=100, output_tokens=50)
 
 
 class TestCollectDiscussion:
@@ -52,6 +57,8 @@ class TestPostResult:
         _post_result(g, "o", "r", 1, "https://github.com/o/r/pull/5")
         body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
         assert "https://github.com/o/r/pull/5" in body
+        # No cost line when cost_eur is None
+        assert "💸" not in body
 
     def test_posts_pr_url(self):
         g = MagicMock()
@@ -59,6 +66,12 @@ class TestPostResult:
         body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
         assert "https://github.com/o/r/pull/7" in body
         assert "complete" in body.lower()
+
+    def test_posts_with_cost(self):
+        g = MagicMock()
+        _post_result(g, "o", "r", 1, "https://github.com/o/r/pull/5", cost_eur=3.50)
+        body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
+        assert "💸 This task cost 3.50€" in body
 
 
 class TestAssignReviewerAndFinish:
@@ -68,7 +81,7 @@ class TestAssignReviewerAndFinish:
         with patch("clayde.tasks.implement.get_issue_author", return_value="alice"), \
              patch("clayde.tasks.implement.parse_pr_url", return_value=("o", "r", 5)), \
              patch("clayde.tasks.implement.add_pr_reviewer") as mock_reviewer, \
-             patch("clayde.tasks.implement.post_comment"), \
+             patch("clayde.tasks.implement.post_comment") as mock_post, \
              patch("clayde.tasks.implement.update_issue_state") as mock_update:
             _assign_reviewer_and_finish(g, "o", "r", 1, "url", "https://github.com/o/r/pull/5", span)
 
@@ -78,6 +91,20 @@ class TestAssignReviewerAndFinish:
         assert update_data["status"] == "pr_open"
         assert update_data["pr_url"] == "https://github.com/o/r/pull/5"
         assert update_data["last_seen_review_id"] == 0
+
+    def test_passes_cost_to_post_result(self):
+        g = MagicMock()
+        span = MagicMock()
+        with patch("clayde.tasks.implement.get_issue_author", return_value="alice"), \
+             patch("clayde.tasks.implement.parse_pr_url", return_value=("o", "r", 5)), \
+             patch("clayde.tasks.implement.add_pr_reviewer"), \
+             patch("clayde.tasks.implement.post_comment") as mock_post, \
+             patch("clayde.tasks.implement.update_issue_state"):
+            _assign_reviewer_and_finish(g, "o", "r", 1, "url", "https://github.com/o/r/pull/5", span,
+                                        cost_eur=4.20)
+
+        posted_body = mock_post.call_args[0][4]
+        assert "💸 This task cost 4.20€" in posted_body
 
     def test_handles_reviewer_failure_gracefully(self):
         g = MagicMock()
@@ -106,17 +133,23 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("IMPLEMENTATION_COMPLETE", cost_eur=5.00)), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
              patch("clayde.tasks.implement.create_pull_request", return_value="https://github.com/o/r/pull/5") as mock_cpr, \
              patch("clayde.tasks.implement._assign_reviewer_and_finish") as mock_finish, \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
              patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test issue"
             run("https://github.com/o/r/issues/1")
 
         mock_cpr.assert_called_once()
+        # PR body should include cost
+        pr_body = mock_cpr.call_args.kwargs.get("body") or mock_cpr.call_args[1].get("body", "")
+        assert "💸 This task cost 5.00€" in pr_body
         mock_finish.assert_called_once()
+        # Cost is passed to _assign_reviewer_and_finish
+        assert mock_finish.call_args.kwargs.get("cost_eur") == 5.00 or mock_finish.call_args[1].get("cost_eur") == 5.00
 
     def test_existing_pr_reused(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
@@ -130,10 +163,11 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("IMPLEMENTATION_COMPLETE")), \
              patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
              patch("clayde.tasks.implement.create_pull_request") as mock_cpr, \
              patch("clayde.tasks.implement._assign_reviewer_and_finish") as mock_finish, \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
              patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             run("https://github.com/o/r/issues/1")
@@ -141,7 +175,7 @@ class TestRun:
         mock_cpr.assert_not_called()
         mock_finish.assert_called_once()
 
-    def test_usage_limit_sets_interrupted(self, tmp_path):
+    def test_usage_limit_sets_interrupted_and_accumulates_cost(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client"), \
              patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
@@ -153,7 +187,8 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", side_effect=UsageLimitError("limit")), \
+             patch("clayde.tasks.implement.invoke_claude", side_effect=UsageLimitError("limit", cost_eur=2.00)), \
+             patch("clayde.tasks.implement.accumulate_cost") as mock_accum, \
              patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             run("url")
@@ -161,6 +196,7 @@ class TestRun:
         last_call = mock_update.call_args_list[-1]
         assert last_call[0][1]["status"] == "interrupted"
         assert last_call[0][1]["interrupted_phase"] == "implementing"
+        mock_accum.assert_called_once_with("url", 2.00)
 
     def test_resumes_interrupted_with_existing_pr(self):
         state = {"plan_comment_id": 100, "status": "interrupted"}
@@ -169,11 +205,32 @@ class TestRun:
              patch("clayde.tasks.implement.get_issue_state", return_value=state), \
              patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
              patch("clayde.tasks.implement._assign_reviewer_and_finish") as mock_finish, \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=3.00), \
              patch("clayde.tasks.implement.invoke_claude") as mock_claude:
             run("url")
             mock_claude.assert_not_called()
 
         mock_finish.assert_called_once()
+        # Accumulated cost should be passed
+        finish_kwargs = mock_finish.call_args
+        assert finish_kwargs.kwargs.get("cost_eur") == 3.00
+
+    def test_resumes_interrupted_with_existing_pr_no_accumulated_cost(self):
+        state = {"plan_comment_id": 100, "status": "interrupted"}
+        with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value=state), \
+             patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
+             patch("clayde.tasks.implement._assign_reviewer_and_finish") as mock_finish, \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
+             patch("clayde.tasks.implement.invoke_claude") as mock_claude:
+            run("url")
+            mock_claude.assert_not_called()
+
+        mock_finish.assert_called_once()
+        # No cost to report when accumulated is 0
+        finish_kwargs = mock_finish.call_args
+        assert finish_kwargs.kwargs.get("cost_eur") is None
 
     def test_pr_creation_failure_sets_interrupted(self, tmp_path):
         with patch("clayde.tasks.implement.get_github_client") as mock_gc, \
@@ -187,10 +244,11 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("IMPLEMENTATION_COMPLETE")), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
              patch("clayde.tasks.implement.create_pull_request", side_effect=Exception("API error")), \
              patch("clayde.tasks.implement.post_comment"), \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
              patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test issue"
@@ -213,10 +271,11 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", return_value="IMPLEMENTATION_COMPLETE"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("IMPLEMENTATION_COMPLETE")), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
              patch("clayde.tasks.implement.create_pull_request", side_effect=Exception("API error")), \
              patch("clayde.tasks.implement.post_comment"), \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
              patch("clayde.tasks.implement.DATA_DIR", tmp_path):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test issue"
@@ -255,9 +314,10 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", return_value="done") as mock_claude, \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("done")) as mock_claude, \
              patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
              patch("clayde.tasks.implement._assign_reviewer_and_finish"), \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
              patch("clayde.tasks.implement.DATA_DIR", Path("/tmp/test-data")):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test"
@@ -286,10 +346,11 @@ class TestRun:
              patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
-             patch("clayde.tasks.implement.invoke_claude", return_value="done"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("done")), \
              patch("clayde.tasks.implement.create_pull_request", return_value="https://github.com/o/r/pull/5"), \
              patch("clayde.tasks.implement._assign_reviewer_and_finish"), \
              patch("clayde.tasks.implement._checkout_wip_branch") as mock_checkout, \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
              patch("clayde.tasks.implement.DATA_DIR", Path("/tmp/test-data")):
             mock_fc.return_value.body = "plan text"
             mock_fi.return_value.title = "Test"

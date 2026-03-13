@@ -8,6 +8,7 @@ import pytest
 import anthropic
 
 from clayde.claude import (
+    InvocationResult,
     UsageLimitError,
     _calculate_cost_usd,
     _commit_wip,
@@ -15,6 +16,7 @@ from clayde.claude import (
     _load_conversation,
     _save_conversation,
     _serialize_messages,
+    format_cost_line,
     invoke_claude,
     is_claude_available,
 )
@@ -63,6 +65,50 @@ def _make_tool_response(tool_blocks, input_tokens=150, output_tokens=80):
     response.usage.output_tokens = output_tokens
     response._raw_response.headers = {}
     return response
+
+
+class TestInvocationResult:
+    def test_construction(self):
+        result = InvocationResult(output="hello", cost_eur=1.23, input_tokens=100, output_tokens=50)
+        assert result.output == "hello"
+        assert result.cost_eur == 1.23
+        assert result.input_tokens == 100
+        assert result.output_tokens == 50
+
+    def test_zero_cost(self):
+        result = InvocationResult(output="", cost_eur=0.0, input_tokens=0, output_tokens=0)
+        assert result.cost_eur == 0.0
+
+
+class TestUsageLimitErrorCost:
+    def test_default_cost_is_zero(self):
+        e = UsageLimitError("limit hit")
+        assert e.cost_eur == 0.0
+        assert str(e) == "limit hit"
+
+    def test_carries_partial_cost(self):
+        e = UsageLimitError("limit hit", cost_eur=2.50)
+        assert e.cost_eur == 2.50
+
+    def test_backward_compatible_raise(self):
+        """Old code that raises UsageLimitError('msg') still works."""
+        with pytest.raises(UsageLimitError) as exc_info:
+            raise UsageLimitError("old style")
+        assert exc_info.value.cost_eur == 0.0
+
+
+class TestFormatCostLine:
+    def test_zero_cost(self):
+        assert format_cost_line(0.0) == "\n\n💸 This task cost 0.00€"
+
+    def test_small_cost(self):
+        assert format_cost_line(0.01) == "\n\n💸 This task cost 0.01€"
+
+    def test_normal_cost(self):
+        assert format_cost_line(2.34) == "\n\n💸 This task cost 2.34€"
+
+    def test_large_cost(self):
+        assert format_cost_line(15.678) == "\n\n💸 This task cost 15.68€"
 
 
 class TestCalculateCostUsd:
@@ -171,7 +217,11 @@ class TestInvokeClaude:
              patch("clayde.claude._get_client", return_value=mock_client):
             result = invoke_claude("test prompt", str(tmp_path))
 
-        assert result == "plan output"
+        assert isinstance(result, InvocationResult)
+        assert result.output == "plan output"
+        assert result.cost_eur >= 0.0
+        assert result.input_tokens == 200
+        assert result.output_tokens == 100
         mock_client.beta.messages.create.assert_called_once()
 
     def test_tool_loop_executes_tools_then_end_turn(self, tmp_path):
@@ -193,7 +243,7 @@ class TestInvokeClaude:
              patch("clayde.claude._execute_tool", return_value="tool output") as mock_exec:
             result = invoke_claude("implement", str(tmp_path))
 
-        assert result == "finished"
+        assert result.output == "finished"
         assert mock_client.beta.messages.create.call_count == 2
         mock_exec.assert_called_once()
 
@@ -207,8 +257,32 @@ class TestInvokeClaude:
         with patch("clayde.claude.APP_DIR", tmp_path), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client):
-            with pytest.raises(UsageLimitError):
+            with pytest.raises(UsageLimitError) as exc_info:
                 invoke_claude("prompt", "/repo")
+            # No tokens consumed before the first API call, so cost should be 0
+            assert exc_info.value.cost_eur == 0.0
+
+    def test_rate_limit_after_tool_use_carries_partial_cost(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+
+        # First call succeeds with tool use, second call hits rate limit
+        tool_block = _make_tool_use_block("bash", "t1", {"command": "echo x"})
+        tool_response = _make_tool_response([tool_block], input_tokens=1000, output_tokens=500)
+
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.side_effect = [
+            tool_response,
+            anthropic.RateLimitError(message="rate limit", response=MagicMock(), body={}),
+        ]
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
+             patch("clayde.claude._get_client", return_value=mock_client), \
+             patch("clayde.claude._execute_tool", return_value="output"):
+            with pytest.raises(UsageLimitError) as exc_info:
+                invoke_claude("prompt", "/repo")
+            # Should carry partial cost from the tokens consumed in the first turn
+            assert exc_info.value.cost_eur > 0.0
 
     def test_overloaded_529_raises_usage_limit_error(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
@@ -222,8 +296,9 @@ class TestInvokeClaude:
         with patch("clayde.claude.APP_DIR", tmp_path), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client):
-            with pytest.raises(UsageLimitError):
+            with pytest.raises(UsageLimitError) as exc_info:
                 invoke_claude("prompt", "/repo")
+            assert exc_info.value.cost_eur == 0.0
 
     def test_other_api_error_propagates(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
@@ -281,7 +356,10 @@ class TestInvokeClaude:
              patch("clayde.claude._execute_tool", return_value="x"):
             result = invoke_claude("impl", str(tmp_path))
 
-        assert result == "done"
+        assert result.output == "done"
+        assert result.input_tokens == 300  # 100 + 200
+        assert result.output_tokens == 150  # 50 + 100
+        assert result.cost_eur > 0.0
         assert mock_client.beta.messages.create.call_count == 2
 
 
@@ -476,7 +554,7 @@ class TestConversationPersistence:
              patch("clayde.claude._get_client", return_value=mock_client):
             result = invoke_claude("new prompt", str(tmp_path), conversation_path=conv_path)
 
-        assert result == "resumed output"
+        assert result.output == "resumed output"
         # Check the first call's messages (before the loop mutates it)
         first_call = mock_client.beta.messages.create.call_args_list[0]
         messages_sent = first_call.kwargs["messages"]
@@ -497,7 +575,7 @@ class TestConversationPersistence:
              patch("clayde.claude._get_client", return_value=mock_client):
             result = invoke_claude("prompt", str(tmp_path), conversation_path=conv_path)
 
-        assert result == "fresh output"
+        assert result.output == "fresh output"
         first_call = mock_client.beta.messages.create.call_args_list[0]
         messages_sent = first_call.kwargs["messages"]
         # First message should be the user prompt, second is the assistant response appended by the loop

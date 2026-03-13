@@ -42,3 +42,20 @@ def update_issue_state(issue_url, updates):
                 "old_status": old_status or "(none)",
                 "new_status": new_status or "(none)",
             })
+
+
+def accumulate_cost(issue_url: str, cost_eur: float) -> None:
+    """Add cost to the running total for this issue."""
+    state = load_state()
+    entry = state["issues"].setdefault(issue_url, {})
+    entry["accumulated_cost_eur"] = entry.get("accumulated_cost_eur", 0.0) + cost_eur
+    save_state(state)
+
+
+def pop_accumulated_cost(issue_url: str) -> float:
+    """Return and reset the accumulated cost for this issue."""
+    state = load_state()
+    entry = state["issues"].get(issue_url, {})
+    cost = entry.pop("accumulated_cost_eur", 0.0)
+    save_state(state)
+    return cost
