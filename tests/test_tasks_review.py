@@ -3,8 +3,13 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from clayde.claude import UsageLimitError
+from clayde.claude import InvocationResult, UsageLimitError
 from clayde.tasks.review import _build_prompt, _format_reviews, run
+
+
+def _make_result(output: str, cost_eur: float = 0.50) -> InvocationResult:
+    """Helper to create an InvocationResult for testing."""
+    return InvocationResult(output=output, cost_eur=cost_eur, input_tokens=100, output_tokens=50)
 
 
 def _mock_settings():
@@ -75,7 +80,7 @@ class TestRun:
             run("url")
             mock_claude.assert_not_called()
 
-    def test_addresses_new_review(self, tmp_path):
+    def test_addresses_new_review_with_cost(self, tmp_path):
         review = MagicMock()
         review.id = 100
         review.user.login = "alice"
@@ -103,8 +108,9 @@ class TestRun:
              patch("clayde.tasks.review.fetch_issue") as mock_fi, \
              patch("clayde.tasks.review.get_default_branch", return_value="main"), \
              patch("clayde.tasks.review.ensure_repo", return_value="/tmp/repo"), \
-             patch("clayde.tasks.review.invoke_claude", return_value="Changes made") as mock_claude, \
+             patch("clayde.tasks.review.invoke_claude", return_value=_make_result("Changes made", cost_eur=1.20)) as mock_claude, \
              patch("clayde.tasks.review.post_comment") as mock_post, \
+             patch("clayde.tasks.review.pop_accumulated_cost", return_value=0.0), \
              patch("clayde.tasks.review.DATA_DIR", tmp_path):
             mock_fi.return_value.title = "Fix bug"
             mock_fi.return_value.body = "body"
@@ -114,6 +120,7 @@ class TestRun:
         mock_post.assert_called_once()
         posted_body = mock_post.call_args[0][4]
         assert "Review addressed" in posted_body
+        assert "💸 This task cost 1.20€" in posted_body
         # Should return to pr_open
         last_update = mock_update.call_args_list[-1][0][1]
         assert last_update["status"] == "pr_open"
@@ -143,7 +150,7 @@ class TestRun:
         calls = mock_update.call_args_list
         assert any(c[0][1].get("status") == "done" for c in calls)
 
-    def test_usage_limit_sets_interrupted(self, tmp_path):
+    def test_usage_limit_sets_interrupted_and_accumulates_cost(self, tmp_path):
         review = MagicMock()
         review.id = 100
         review.user.login = "alice"
@@ -165,7 +172,8 @@ class TestRun:
              patch("clayde.tasks.review.fetch_issue") as mock_fi, \
              patch("clayde.tasks.review.get_default_branch", return_value="main"), \
              patch("clayde.tasks.review.ensure_repo", return_value="/tmp/repo"), \
-             patch("clayde.tasks.review.invoke_claude", side_effect=UsageLimitError("limit")), \
+             patch("clayde.tasks.review.invoke_claude", side_effect=UsageLimitError("limit", cost_eur=0.90)), \
+             patch("clayde.tasks.review.accumulate_cost") as mock_accum, \
              patch("clayde.tasks.review.DATA_DIR", tmp_path):
             mock_fi.return_value.title = "Fix bug"
             mock_fi.return_value.body = "body"
@@ -174,6 +182,7 @@ class TestRun:
         last_call = mock_update.call_args_list[-1]
         assert last_call[0][1]["status"] == "interrupted"
         assert last_call[0][1]["interrupted_phase"] == "addressing_review"
+        mock_accum.assert_called_once_with("url", 0.90)
 
     def test_no_pr_url_skips(self):
         with patch("clayde.tasks.review.get_github_client"), \

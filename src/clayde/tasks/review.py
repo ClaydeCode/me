@@ -5,7 +5,7 @@ from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
 
-from clayde.claude import UsageLimitError, invoke_claude
+from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client, get_settings
 from clayde.git import ensure_repo
 from clayde.github import (
@@ -17,7 +17,7 @@ from clayde.github import (
     parse_pr_url,
     post_comment,
 )
-from clayde.state import get_issue_state, update_issue_state
+from clayde.state import accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.review")
@@ -105,14 +105,15 @@ def run(issue_url: str) -> None:
         conv_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            output = invoke_claude(
+            result = invoke_claude(
                 prompt,
                 repo_path,
                 branch_name=branch_name,
                 conversation_path=conv_path,
             )
-        except UsageLimitError:
+        except UsageLimitError as e:
             log.warning("Usage limit hit during review handling #%d", number)
+            accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("review.status", "limit")
             update_issue_state(issue_url, {
                 "status": "interrupted",
@@ -120,10 +121,13 @@ def run(issue_url: str) -> None:
             })
             return
 
+        output = result.output
+        total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
+
         # Post summary comment on the issue
         if output and output.strip():
             post_comment(g, owner, repo, number,
-                         f"**Review addressed.** {output.strip()}")
+                         f"**Review addressed.** {output.strip()}{format_cost_line(total_cost)}")
 
         # Update last seen review ID and return to pr_open
         max_review_id = max(r.id for r in new_reviews)

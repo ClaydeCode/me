@@ -10,7 +10,7 @@ from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
 
-from clayde.claude import UsageLimitError, invoke_claude
+from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
@@ -28,7 +28,7 @@ from clayde.github import (
     post_comment,
 )
 from clayde.safety import filter_comments
-from clayde.state import get_issue_state, update_issue_state
+from clayde.state import accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.implement")
@@ -56,7 +56,11 @@ def run(issue_url: str) -> None:
             existing_pr = find_open_pr(g, owner, repo, branch_name)
             if existing_pr:
                 log.info("Resuming interrupted #%d — found existing PR %s", number, existing_pr)
-                _assign_reviewer_and_finish(g, owner, repo, number, issue_url, existing_pr, span)
+                accumulated = pop_accumulated_cost(issue_url)
+                _assign_reviewer_and_finish(
+                    g, owner, repo, number, issue_url, existing_pr, span,
+                    cost_eur=accumulated if accumulated > 0 else None,
+                )
                 return
 
         update_issue_state(issue_url, {"status": "implementing"})
@@ -86,18 +90,22 @@ def run(issue_url: str) -> None:
 
         log.info("Invoking Claude for implementation of issue #%d", number)
         try:
-            output = invoke_claude(
+            result = invoke_claude(
                 prompt,
                 repo_path,
                 branch_name=branch_name,
                 conversation_path=conv_path,
             )
-        except UsageLimitError:
+        except UsageLimitError as e:
             log.warning("Usage limit hit during implementation #%d — will retry next cycle", number)
+            accumulate_cost(issue_url, e.cost_eur)
             log.info("Conversation saved to %s", conv_path)
             span.set_attribute("implement.status", "limit")
             update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
             return
+
+        output = result.output
+        total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
 
         # Check for existing PR first (e.g. from a previous interrupted run)
         pr_url = find_open_pr(g, owner, repo, branch_name)
@@ -108,7 +116,7 @@ def run(issue_url: str) -> None:
                 pr_url = create_pull_request(
                     g, owner, repo,
                     title=f"Fix #{number}: {issue_obj.title}",
-                    body=f"Closes #{number}",
+                    body=f"Closes #{number}{format_cost_line(total_cost)}",
                     head=branch_name,
                     base=default_branch,
                 )
@@ -117,7 +125,8 @@ def run(issue_url: str) -> None:
                 log.error("Failed to create PR for #%d: %s", number, e)
 
         if pr_url:
-            _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span)
+            _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
+                                        cost_eur=total_cost)
             log.info("Conversation saved to %s", conv_path)
         else:
             log.error("Implementation of #%d produced no PR", number)
@@ -140,9 +149,10 @@ def run(issue_url: str) -> None:
                                                "retry_count": retry_count})
 
 
-def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span):
+def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
+                                cost_eur=None):
     """Post result, assign reviewer, set status to pr_open."""
-    _post_result(g, owner, repo, number, pr_url)
+    _post_result(g, owner, repo, number, pr_url, cost_eur=cost_eur)
 
     # Assign the issue author as PR reviewer
     try:
@@ -220,5 +230,9 @@ def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo:
     )
 
 
-def _post_result(g, owner: str, repo: str, number: int, pr_url: str) -> None:
-    post_comment(g, owner, repo, number, f"Implementation complete — PR opened: {pr_url}")
+def _post_result(g, owner: str, repo: str, number: int, pr_url: str,
+                 cost_eur: float | None = None) -> None:
+    body = f"Implementation complete — PR opened: {pr_url}"
+    if cost_eur is not None:
+        body += format_cost_line(cost_eur)
+    post_comment(g, owner, repo, number, body)

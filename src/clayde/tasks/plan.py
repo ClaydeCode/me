@@ -11,7 +11,7 @@ from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
 
-from clayde.claude import UsageLimitError, invoke_claude
+from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import get_github_client, get_settings
 from clayde.git import ensure_repo
 from clayde.github import (
@@ -24,7 +24,7 @@ from clayde.github import (
     post_comment,
 )
 from clayde.safety import filter_comments, is_issue_visible
-from clayde.state import update_issue_state
+from clayde.state import accumulate_cost, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.plan")
@@ -60,9 +60,10 @@ def run_preliminary(issue_url: str) -> None:
 
         log.info("Invoking Claude for preliminary plan on issue #%d", number)
         try:
-            plan_text = invoke_claude(prompt, repo_path)
-        except UsageLimitError:
+            result = invoke_claude(prompt, repo_path)
+        except UsageLimitError as e:
             log.warning("Usage limit hit during preliminary planning #%d", number)
+            accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.status", "limit")
             update_issue_state(issue_url, {
                 "status": "interrupted",
@@ -70,6 +71,8 @@ def run_preliminary(issue_url: str) -> None:
             })
             return
 
+        plan_text = result.output
+        total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
         span.set_attribute("plan.output_length", len(plan_text))
 
         if not plan_text.strip():
@@ -88,7 +91,7 @@ def run_preliminary(issue_url: str) -> None:
             })
             return
 
-        comment_id = _post_preliminary_comment(g, owner, repo, number, plan_text)
+        comment_id = _post_preliminary_comment(g, owner, repo, number, plan_text, total_cost)
 
         # Track the last seen comment so we can detect new ones later
         all_comments = fetch_issue_comments(g, owner, repo, number)
@@ -140,9 +143,10 @@ def run_thorough(issue_url: str) -> None:
 
         log.info("Invoking Claude for thorough plan on issue #%d", number)
         try:
-            plan_text = invoke_claude(prompt, repo_path)
-        except UsageLimitError:
+            result = invoke_claude(prompt, repo_path)
+        except UsageLimitError as e:
             log.warning("Usage limit hit during thorough planning #%d", number)
+            accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.status", "limit")
             update_issue_state(issue_url, {
                 "status": "interrupted",
@@ -150,6 +154,8 @@ def run_thorough(issue_url: str) -> None:
             })
             return
 
+        plan_text = result.output
+        total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
         span.set_attribute("plan.output_length", len(plan_text))
 
         if not plan_text.strip():
@@ -168,7 +174,7 @@ def run_thorough(issue_url: str) -> None:
             })
             return
 
-        comment_id = _post_thorough_plan_comment(g, owner, repo, number, plan_text)
+        comment_id = _post_thorough_plan_comment(g, owner, repo, number, plan_text, total_cost)
 
         # Update last seen comment
         all_comments = fetch_issue_comments(g, owner, repo, number)
@@ -249,9 +255,10 @@ def run_update(issue_url: str, phase: str) -> None:
 
         log.info("Invoking Claude for plan update on issue #%d (%s phase)", number, phase)
         try:
-            output = invoke_claude(prompt, repo_path)
-        except UsageLimitError:
+            result = invoke_claude(prompt, repo_path)
+        except UsageLimitError as e:
             log.warning("Usage limit hit during plan update #%d", number)
+            accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.update_status", "limit")
             update_issue_state(issue_url, {
                 "status": "interrupted",
@@ -259,8 +266,10 @@ def run_update(issue_url: str, phase: str) -> None:
             })
             return
 
+        total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
+
         # Parse output into summary + updated plan
-        summary, updated_plan = _parse_update_output(output)
+        summary, updated_plan = _parse_update_output(result.output)
 
         if updated_plan:
             # Edit the existing plan comment
@@ -270,7 +279,7 @@ def run_update(issue_url: str, phase: str) -> None:
         if summary:
             # Post a new comment with the change summary
             post_comment(g, owner, repo, number,
-                         f"**Plan updated.** {summary}")
+                         f"**Plan updated.** {summary}{format_cost_line(total_cost)}")
 
         # Update last seen comment
         all_comments = fetch_issue_comments(g, owner, repo, number)
@@ -363,23 +372,27 @@ def _build_update_prompt(number, title, owner, repo, body, current_plan_text,
 # Comment formatting
 # ---------------------------------------------------------------------------
 
-def _post_preliminary_comment(g, owner: str, repo: str, number: int, plan_text: str) -> int:
+def _post_preliminary_comment(g, owner: str, repo: str, number: int, plan_text: str,
+                              cost_eur: float = 0.0) -> int:
     comment_body = (
         f"## Preliminary Plan\n\n"
         f"{plan_text}\n\n"
         f"---\n"
         f"*React with \U0001f44d to approve this preliminary plan and proceed "
         f"to a thorough implementation plan.*"
+        f"{format_cost_line(cost_eur)}"
     )
     return post_comment(g, owner, repo, number, comment_body)
 
 
-def _post_thorough_plan_comment(g, owner: str, repo: str, number: int, plan_text: str) -> int:
+def _post_thorough_plan_comment(g, owner: str, repo: str, number: int, plan_text: str,
+                                cost_eur: float = 0.0) -> int:
     comment_body = (
         f"## Implementation Plan\n\n"
         f"{plan_text}\n\n"
         f"---\n"
         f"*React with \U0001f44d to approve this plan and start implementation.*"
+        f"{format_cost_line(cost_eur)}"
     )
     return post_comment(g, owner, repo, number, comment_body)
 
