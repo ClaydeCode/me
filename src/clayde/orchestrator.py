@@ -51,7 +51,7 @@ _STATUS_COMPAT = {
 def _handle_new_issue(g: Github, issue: Issue, url: str) -> None:
     """Handle a newly assigned issue — check for visible content and blocked state."""
     tracer = get_tracer()
-    with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": "new"}) as span:
+    with tracer.start_as_current_span("clayde.handle_new_issue", attributes={"issue.url": url}) as span:
         owner, repo, number = parse_issue_url(url)
 
         # Check if issue is blocked by another open issue
@@ -96,7 +96,7 @@ def _handle_awaiting_approval(g: Github, url: str, issue_state: dict, *, phase: 
     next_task_label = "thorough_plan" if phase == "preliminary" else "implement"
 
     tracer = get_tracer()
-    with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": f"awaiting_{phase}_approval"}) as span:
+    with tracer.start_as_current_span(f"clayde.handle_awaiting_{phase}_approval", attributes={"issue.url": url}) as span:
         owner = issue_state["owner"]
         repo = issue_state["repo"]
         number = issue_state["number"]
@@ -141,7 +141,7 @@ def _handle_awaiting_approval(g: Github, url: str, issue_state: dict, *, phase: 
 def _handle_pr_open(g: Github, url: str, issue_state: dict) -> None:
     """Handle pr_open — check for new reviews on the PR."""
     tracer = get_tracer()
-    with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": "pr_open"}) as span:
+    with tracer.start_as_current_span("clayde.handle_pr_open", attributes={"issue.url": url}) as span:
         span.set_attribute("issue.number", issue_state.get("number", 0))
         log.info("Checking for PR reviews on %s", url)
         try:
@@ -159,7 +159,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
     """Handle interrupted issues — retry the interrupted phase."""
     tracer = get_tracer()
     phase = issue_state.get("interrupted_phase")
-    with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": "interrupted", "issue.interrupted_phase": phase or "unknown"}) as span:
+    with tracer.start_as_current_span("clayde.handle_interrupted", attributes={"issue.url": url, "issue.interrupted_phase": phase or "unknown"}) as span:
         log.info("Retrying interrupted issue %s (phase: %s)", url, phase)
 
         task_map = {
