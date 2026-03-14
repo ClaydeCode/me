@@ -269,6 +269,108 @@ def _build_usage_limit_error(
     return exc
 
 
+def _load_or_start_conversation(
+    prompt: str,
+    conversation_path: "Path | None",
+    span,
+) -> list:
+    """Return the message list to start the tool loop with.
+
+    If a saved conversation exists at conversation_path, resume from it by
+    appending a continuation message. Otherwise start fresh with the prompt.
+    """
+    if conversation_path:
+        saved = _load_conversation(conversation_path)
+        if saved:
+            saved.append({"role": "user", "content":
+                "You were interrupted by a rate limit. Your previous edits have been "
+                "preserved on the branch. Continue where you left off."})
+            span.set_attribute("claude.resumed", True)
+            span.set_attribute("claude.resumed_messages", len(saved))
+            log.info("Resuming conversation with %d existing messages", len(saved))
+            return saved
+
+    span.set_attribute("claude.resumed", False)
+    return [{"role": "user", "content": prompt}]
+
+
+def _run_tool_loop(
+    *,
+    client,
+    model: str,
+    max_tokens: int,
+    identity: str,
+    messages: list,
+    deadline: float,
+    repo_path: str,
+    span,
+    timeout_s: int,
+    token_counter: dict,
+) -> str:
+    """Run the Claude API tool-use loop until end_turn, timeout, or exception.
+
+    token_counter is a mutable {"input": int, "output": int} dict that is
+    updated after every API call so partial counts are available if an
+    exception propagates out of this function.
+
+    Returns the final output text. Raises TimeoutError if the deadline is exceeded.
+    """
+    tools = [
+        {"type": "bash_20250124", "name": "bash"},
+        {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+    ]
+    turn_count = 0
+    output = ""
+
+    while time.monotonic() < deadline:
+        response = client.beta.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=identity,
+            tools=tools,
+            messages=messages,
+            betas=["computer-use-2024-10-22"],
+        )
+        turn_count += 1
+        token_counter["input"] += response.usage.input_tokens
+        token_counter["output"] += response.usage.output_tokens
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason == "end_turn":
+            output = "".join(b.text for b in response.content if hasattr(b, "text"))
+            _set_ratelimit_attributes(span, response)
+            break
+
+        tool_results = _execute_all_tools(response.content, repo_path)
+        if not tool_results:
+            log.warning("No tool calls and stop_reason=%s — breaking loop", response.stop_reason)
+            break
+        messages.append({"role": "user", "content": tool_results})
+    else:
+        span.set_attribute("claude.timeout", True)
+        exc = TimeoutError(f"Claude tool loop exceeded {timeout_s}s")
+        span.record_exception(exc)
+        raise exc
+
+    span.set_attribute("claude.turns", turn_count)
+    return output
+
+
+def _execute_all_tools(content: list, repo_path: str) -> list:
+    """Execute every tool_use block in a response and return tool_result messages."""
+    results = []
+    for block in content:
+        if block.type == "tool_use":
+            output = _execute_tool(block, cwd=repo_path)
+            log.info("Tool %s executed (output: %d chars)", block.name, len(output))
+            results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": output,
+            })
+    return results
+
+
 def invoke_claude(
     prompt: str,
     repo_path: str,
@@ -307,86 +409,24 @@ def invoke_claude(
 
         span.set_attribute("claude.model", model)
 
-        total_input_tokens = 0
-        total_output_tokens = 0
+        token_counter = {"input": 0, "output": 0}
 
         try:
-            tools = [
-                {"type": "bash_20250124", "name": "bash"},
-                {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
-            ]
-
-            # Try to resume from a saved conversation
-            resumed = False
-            if conversation_path:
-                saved = _load_conversation(conversation_path)
-                if saved:
-                    messages = saved
-                    messages.append({"role": "user", "content":
-                        "You were interrupted by a rate limit. Your previous edits have been "
-                        "preserved on the branch. Continue where you left off."})
-                    resumed = True
-                    span.set_attribute("claude.resumed", True)
-                    span.set_attribute("claude.resumed_messages", len(saved))
-                    log.info("Resuming conversation with %d existing messages", len(saved))
-
-            if not resumed:
-                messages = [{"role": "user", "content": prompt}]
-                span.set_attribute("claude.resumed", False)
-
+            messages = _load_or_start_conversation(prompt, conversation_path, span)
             deadline = time.monotonic() + tool_loop_timeout_s
-            turn_count = 0
-            output = ""
 
-            while time.monotonic() < deadline:
-                response = client.beta.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    system=identity,
-                    tools=tools,
-                    messages=messages,
-                    betas=["computer-use-2024-10-22"],
-                )
-                turn_count += 1
-
-                # Accumulate token usage across turns
-                total_input_tokens += response.usage.input_tokens
-                total_output_tokens += response.usage.output_tokens
-
-                messages.append({"role": "assistant", "content": response.content})
-
-                if response.stop_reason == "end_turn":
-                    output = "".join(
-                        b.text for b in response.content if hasattr(b, "text")
-                    )
-                    _set_ratelimit_attributes(span, response)
-                    break
-
-                # Execute tool calls and feed results back
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        result = _execute_tool(block, cwd=repo_path)
-                        log.info("Tool %s executed (output: %d chars)", block.name, len(result))
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        })
-
-                if not tool_results:
-                    # No tool calls and stop reason isn't end_turn — break to avoid infinite loop
-                    log.warning("No tool calls and stop_reason=%s — breaking loop", response.stop_reason)
-                    break
-
-                messages.append({"role": "user", "content": tool_results})
-            else:
-                span.set_attribute("claude.timeout", True)
-                exc = TimeoutError(f"Claude tool loop exceeded {tool_loop_timeout_s}s")
-                span.record_exception(exc)
-                raise exc
-
-            span.set_attribute("claude.turns", turn_count)
+            output = _run_tool_loop(
+                client=client,
+                model=model,
+                max_tokens=max_tokens,
+                identity=identity,
+                messages=messages,
+                deadline=deadline,
+                repo_path=repo_path,
+                span=span,
+                timeout_s=tool_loop_timeout_s,
+                token_counter=token_counter,
+            )
 
         except anthropic.RateLimitError as e:
             log.error("Claude API rate limit hit: %s", e)
@@ -394,8 +434,8 @@ def invoke_claude(
                 f"Claude API rate limit: {e}",
                 cause=e,
                 model=model,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
+                input_tokens=token_counter["input"],
+                output_tokens=token_counter["output"],
                 repo_path=repo_path,
                 branch_name=branch_name,
                 conversation_path=conversation_path,
@@ -410,8 +450,8 @@ def invoke_claude(
                     f"Claude API overloaded: {e}",
                     cause=e,
                     model=model,
-                    input_tokens=total_input_tokens,
-                    output_tokens=total_output_tokens,
+                    input_tokens=token_counter["input"],
+                    output_tokens=token_counter["output"],
                     repo_path=repo_path,
                     branch_name=branch_name,
                     conversation_path=conversation_path,
@@ -423,6 +463,8 @@ def invoke_claude(
             raise
 
         # Record usage metrics
+        total_input_tokens = token_counter["input"]
+        total_output_tokens = token_counter["output"]
         cost_usd = _calculate_cost_usd(model, total_input_tokens, total_output_tokens)
         cost_eur = cost_usd * _EUR_PER_USD
         span.set_attribute("claude.input_tokens", total_input_tokens)
