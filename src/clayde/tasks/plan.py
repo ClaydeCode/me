@@ -25,7 +25,7 @@ from clayde.github import (
 )
 from clayde.prompts import collect_comments_after, render_template
 from clayde.safety import filter_comments, is_issue_visible
-from clayde.state import IssueStatus, accumulate_cost, pop_accumulated_cost, update_issue_state
+from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.plan")
@@ -124,7 +124,6 @@ def run_thorough(issue_url: str) -> None:
         default_branch = get_default_branch(g, owner, repo)
         repo_path = ensure_repo(owner, repo, default_branch)
 
-        from clayde.state import get_issue_state
         issue_state = get_issue_state(issue_url)
         preliminary_comment_id = issue_state.get("preliminary_comment_id")
         preliminary_comment = fetch_comment(g, owner, repo, number, preliminary_comment_id)
@@ -206,7 +205,6 @@ def run_update(issue_url: str, phase: str) -> None:
         span.set_attribute("issue.number", number)
         span.set_attribute("plan.update_phase", phase)
 
-        from clayde.state import get_issue_state
         issue_state = get_issue_state(issue_url)
 
         if phase == "preliminary":
