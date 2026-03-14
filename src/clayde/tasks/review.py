@@ -141,16 +141,17 @@ def _format_reviews(reviews: list, review_comments: list) -> str:
 
     for review in reviews:
         header = f"Review by @{review.user.login} (state: {review.state}):"
-        if review.body and review.body.strip():
-            parts.append(f"{header}\n{review.body}")
+        inline_comments = [rc for rc in review_comments if rc.pull_request_review_id == review.id]
 
-        # Add inline comments from this review
-        for rc in review_comments:
-            if rc.pull_request_review_id == review.id:
-                file_info = f"  File: {rc.path}"
-                if hasattr(rc, "line") and rc.line:
-                    file_info += f", line {rc.line}"
-                parts.append(f"{file_info}\n  {rc.body}")
+        has_body = review.body and review.body.strip()
+        if has_body or inline_comments:
+            parts.append(f"{header}\n{review.body}" if has_body else header)
+
+        for rc in inline_comments:
+            file_info = f"  File: {rc.path}"
+            if hasattr(rc, "line") and rc.line:
+                file_info += f", line {rc.line}"
+            parts.append(f"{file_info}\n  {rc.body}")
 
     return "\n---\n".join(parts) or "(no review content)"
 
