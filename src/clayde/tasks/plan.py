@@ -19,7 +19,7 @@ from clayde.github import (
     parse_issue_url,
     post_comment,
 )
-from clayde.prompts import render_template
+from clayde.prompts import collect_comments_after, render_template
 from clayde.safety import filter_comments, is_issue_visible
 from clayde.state import accumulate_cost, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
@@ -129,7 +129,7 @@ def run_thorough(issue_url: str) -> None:
         # Collect discussion after the preliminary plan
         all_comments = fetch_issue_comments(g, owner, repo, number)
         visible_comments = filter_comments(all_comments)
-        discussion_text = _collect_discussion_after(visible_comments, preliminary_comment_id)
+        discussion_text = collect_comments_after(visible_comments, preliminary_comment_id)
 
         prompt = _build_thorough_prompt(
             g, issue, owner, repo, number, repo_path,
@@ -395,19 +395,6 @@ def _post_thorough_plan_comment(g, owner: str, repo: str, number: int, plan_text
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _collect_discussion_after(comments: list, after_comment_id: int) -> str:
-    """Collect visible comment text posted after a specific comment ID."""
-    found = False
-    discussion = []
-    for c in comments:
-        if c.id == after_comment_id:
-            found = True
-            continue
-        if found:
-            discussion.append(f"@{c.user.login}:\n{c.body}")
-    return "\n---\n".join(discussion) or "(none)"
-
 
 def _parse_update_output(output: str) -> tuple[str, str]:
     """Parse Claude output into (summary, updated_plan).

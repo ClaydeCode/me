@@ -10,7 +10,7 @@ import subprocess
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client
 from clayde.git import ensure_repo
-from clayde.prompts import render_template
+from clayde.prompts import collect_comments_after, render_template
 from clayde.github import (
     add_pr_reviewer,
     create_pull_request,
@@ -77,7 +77,7 @@ def run(issue_url: str) -> None:
 
         all_comments = fetch_issue_comments(g, owner, repo, number)
         visible_comments = filter_comments(all_comments)
-        discussion_text = _collect_discussion(visible_comments, plan_comment_id)
+        discussion_text = collect_comments_after(visible_comments, plan_comment_id)
 
         prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
 
@@ -197,18 +197,6 @@ def _checkout_wip_branch(repo_path, branch_name: str) -> None:
         return
 
     log.info("No existing WIP branch %s found — starting fresh", branch_name)
-
-
-def _collect_discussion(all_comments, plan_comment_id: int) -> str:
-    found_plan = False
-    discussion = []
-    for c in all_comments:
-        if c.id == plan_comment_id:
-            found_plan = True
-            continue
-        if found_plan:
-            discussion.append(f"@{c.user.login}:\n{c.body}")
-    return "\n---\n".join(discussion) or "(none)"
 
 
 def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo: str,

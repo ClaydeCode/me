@@ -4,10 +4,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from clayde.claude import InvocationResult, UsageLimitError
+from clayde.prompts import collect_comments_after
 from clayde.tasks.implement import (
     _assign_reviewer_and_finish,
     _checkout_wip_branch,
-    _collect_discussion,
     _post_result,
     run,
 )
@@ -36,7 +36,7 @@ class TestCollectDiscussion:
         c3.user.login = "bob"
         c3.body = "after plan"
 
-        result = _collect_discussion([c1, c2, c3], 100)
+        result = collect_comments_after([c1, c2, c3], 100)
         assert "@bob" in result
         assert "after plan" in result
         assert "before plan" not in result
@@ -44,11 +44,11 @@ class TestCollectDiscussion:
     def test_no_discussion(self):
         plan = MagicMock()
         plan.id = 100
-        result = _collect_discussion([plan], 100)
+        result = collect_comments_after([plan], 100)
         assert result == "(none)"
 
     def test_empty_comments(self):
-        assert _collect_discussion([], 100) == "(none)"
+        assert collect_comments_after([], 100) == "(none)"
 
 
 class TestPostResult:

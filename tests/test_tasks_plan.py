@@ -3,11 +3,11 @@
 from unittest.mock import MagicMock, patch
 
 from clayde.claude import InvocationResult, UsageLimitError
+from clayde.prompts import collect_comments_after
 from clayde.tasks.plan import (
     _build_preliminary_prompt,
     _build_thorough_prompt,
     _build_update_prompt,
-    _collect_discussion_after,
     _parse_update_output,
     _post_preliminary_comment,
     _post_thorough_plan_comment,
@@ -198,14 +198,14 @@ class TestCollectDiscussionAfter:
         c2.user.login = "alice"
         c2.body = "discussion"
 
-        result = _collect_discussion_after([c1, c2], 100)
+        result = collect_comments_after([c1, c2], 100)
         assert "discussion" in result
         assert "plan text" not in result
 
     def test_none_when_no_comments_after(self):
         c1 = MagicMock()
         c1.id = 100
-        result = _collect_discussion_after([c1], 100)
+        result = collect_comments_after([c1], 100)
         assert result == "(none)"
 
 
