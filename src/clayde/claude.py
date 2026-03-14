@@ -69,6 +69,7 @@ def _calculate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> fl
 def _execute_tool(block, cwd: str) -> str:
     """Execute a bash or text_editor tool call locally and return output."""
     if block.name == "bash":
+        bash_timeout = get_settings().claude_bash_timeout_s
         cmd = block.input.get("command", "")
         try:
             result = subprocess.run(
@@ -77,14 +78,14 @@ def _execute_tool(block, cwd: str) -> str:
                 cwd=cwd,
                 text=True,
                 capture_output=True,
-                timeout=300,
+                timeout=bash_timeout,
             )
             output = result.stdout or ""
             if result.stderr:
                 output += "\n[stderr]\n" + result.stderr
             return output or "(no output)"
         except subprocess.TimeoutExpired:
-            return "[error: command timed out after 300s]"
+            return f"[error: command timed out after {bash_timeout}s]"
         except Exception as e:
             return f"[error: {e}]"
 
@@ -285,6 +286,8 @@ def invoke_claude(
     with tracer.start_as_current_span("clayde.invoke_claude") as span:
         settings = get_settings()
         model = settings.claude_model
+        tool_loop_timeout_s = settings.claude_tool_loop_timeout_s
+        max_tokens = settings.claude_max_tokens
         identity = (APP_DIR / "CLAUDE.md").read_text()
         client = _get_client()
 
@@ -317,14 +320,14 @@ def invoke_claude(
                 messages = [{"role": "user", "content": prompt}]
                 span.set_attribute("claude.resumed", False)
 
-            deadline = time.monotonic() + 1800
+            deadline = time.monotonic() + tool_loop_timeout_s
             turn_count = 0
             output = ""
 
             while time.monotonic() < deadline:
                 response = client.beta.messages.create(
                     model=model,
-                    max_tokens=8192,
+                    max_tokens=max_tokens,
                     system=identity,
                     tools=tools,
                     messages=messages,
@@ -365,7 +368,7 @@ def invoke_claude(
                 messages.append({"role": "user", "content": tool_results})
             else:
                 span.set_attribute("claude.timeout", True)
-                exc = TimeoutError("Claude tool loop exceeded 1800s")
+                exc = TimeoutError(f"Claude tool loop exceeded {tool_loop_timeout_s}s")
                 span.record_exception(exc)
                 raise exc
 

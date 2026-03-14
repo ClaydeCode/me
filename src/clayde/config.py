@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     claude_api_key: str = ""
     claude_model: str = "claude-opus-4-6"
 
+    # Claude invocation tuning
+    claude_tool_loop_timeout_s: int = 1800
+    claude_bash_timeout_s: int = 300
+    claude_max_tokens: int = 8192
+
+    # Orchestrator behaviour
+    loop_interval_s: int = 300
+    implement_max_retries: int = 3
+
     @property
     def whitelisted_users_list(self) -> list[str]:
         return [u.strip() for u in self.whitelisted_users.split(",") if u.strip()]

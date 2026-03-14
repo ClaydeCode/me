@@ -26,6 +26,9 @@ def _mock_settings(model="claude-sonnet-4-6", api_key="test-key"):
     s = MagicMock()
     s.claude_model = model
     s.claude_api_key = api_key
+    s.claude_tool_loop_timeout_s = 1800
+    s.claude_bash_timeout_s = 300
+    s.claude_max_tokens = 8192
     return s
 
 

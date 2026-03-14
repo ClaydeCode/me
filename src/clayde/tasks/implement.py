@@ -8,7 +8,7 @@ import logging
 import subprocess
 
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
-from clayde.config import DATA_DIR, get_github_client
+from clayde.config import DATA_DIR, get_github_client, get_settings
 from clayde.git import ensure_repo
 from clayde.prompts import collect_comments_after, render_template
 from clayde.github import (
@@ -127,8 +127,9 @@ def run(issue_url: str) -> None:
         else:
             log.error("Implementation of #%d produced no PR", number)
             log.error("Claude output (last 2000 chars): %s", (output or "")[-2000:])
+            max_retries = get_settings().implement_max_retries
             retry_count = issue_state.get("retry_count", 0) + 1
-            if retry_count >= 3:
+            if retry_count >= max_retries:
                 log.error("Issue #%d failed after %d retries — giving up", number, retry_count)
                 post_comment(g, owner, repo, number,
                              "Implementation failed to produce a PR after multiple retries. "
@@ -137,7 +138,8 @@ def run(issue_url: str) -> None:
                 update_issue_state(issue_url, {"status": "failed", "retry_count": retry_count})
             else:
                 post_comment(g, owner, repo, number,
-                             f"Implementation ran but no PR was created (attempt {retry_count}/3). "
+                             f"Implementation ran but no PR was created "
+                             f"(attempt {retry_count}/{max_retries}). "
                              "I'll retry on the next cycle.")
                 span.set_attribute("implement.status", "no_pr")
                 span.set_attribute("implement.retry_count", retry_count)

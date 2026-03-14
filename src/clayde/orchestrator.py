@@ -277,9 +277,8 @@ def run_loop():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    interval = int(os.environ.get("CLAYDE_INTERVAL", "300"))
-
     setup_logging()
+    interval = get_settings().loop_interval_s
     log.info("Starting Clayde loop (interval=%ds)", interval)
 
     while not _shutdown:
