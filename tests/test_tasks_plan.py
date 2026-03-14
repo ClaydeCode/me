@@ -45,8 +45,7 @@ class TestBuildPreliminaryPrompt:
         g.get_repo.return_value.get_issue.return_value.get_comments.return_value = [comment]
 
         settings = _mock_settings()
-        with patch("clayde.tasks.plan.get_settings", return_value=settings), \
-             patch("clayde.safety.get_settings", return_value=settings):
+        with patch("clayde.safety.get_settings", return_value=settings):
             prompt = _build_preliminary_prompt(g, issue, "owner", "repo", 42, "/tmp/repo")
         assert "Fix bug" in prompt
         assert "There is a bug" in prompt
@@ -76,8 +75,7 @@ class TestBuildPreliminaryPrompt:
         g.get_repo.return_value.get_issue.return_value.get_comments.return_value = [visible, invisible]
 
         settings = _mock_settings()
-        with patch("clayde.tasks.plan.get_settings", return_value=settings), \
-             patch("clayde.safety.get_settings", return_value=settings):
+        with patch("clayde.safety.get_settings", return_value=settings):
             prompt = _build_preliminary_prompt(g, issue, "owner", "repo", 1, "/path")
         assert "visible comment" in prompt
         assert "invisible comment" not in prompt
@@ -94,8 +92,7 @@ class TestBuildPreliminaryPrompt:
         g.get_repo.return_value.get_issue.return_value.get_comments.return_value = []
 
         settings = _mock_settings()
-        with patch("clayde.tasks.plan.get_settings", return_value=settings), \
-             patch("clayde.safety.get_settings", return_value=settings):
+        with patch("clayde.safety.get_settings", return_value=settings):
             prompt = _build_preliminary_prompt(g, issue, "owner", "repo", 1, "/path")
         assert "secret body" not in prompt
         assert "(filtered)" in prompt
@@ -111,8 +108,7 @@ class TestBuildThoroughPrompt:
         issue.user.login = "alice"
 
         settings = _mock_settings()
-        with patch("clayde.tasks.plan.get_settings", return_value=settings), \
-             patch("clayde.safety.get_settings", return_value=settings):
+        with patch("clayde.safety.get_settings", return_value=settings):
             prompt = _build_thorough_prompt(
                 g, issue, "owner", "repo", 1, "/path",
                 "my preliminary plan", "discussion text",
@@ -382,7 +378,6 @@ class TestRunUpdate:
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
-             patch("clayde.tasks.plan.get_settings", return_value=_mock_settings()), \
              patch("clayde.tasks.plan.fetch_issue") as mock_fi, \
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
@@ -391,7 +386,7 @@ class TestRunUpdate:
                  [new_comment],
                  [last_comment],
              ]), \
-             patch("clayde.tasks.plan.filter_comments", return_value=[new_comment]), \
+             patch("clayde.tasks.plan.get_new_visible_comments", return_value=[new_comment]), \
              patch("clayde.tasks.plan.is_issue_visible", return_value=True), \
              patch("clayde.tasks.plan.invoke_claude",
                    return_value=_make_result("Summary\n---UPDATED_PLAN---\nUpdated plan text", cost_eur=0.80)), \
@@ -422,13 +417,12 @@ class TestRunUpdate:
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
-             patch("clayde.tasks.plan.get_settings", return_value=_mock_settings()), \
              patch("clayde.tasks.plan.fetch_issue") as mock_fi, \
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan.fetch_comment") as mock_fc, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[new_comment]), \
-             patch("clayde.tasks.plan.filter_comments", return_value=[new_comment]), \
+             patch("clayde.tasks.plan.get_new_visible_comments", return_value=[new_comment]), \
              patch("clayde.tasks.plan.is_issue_visible", return_value=True), \
              patch("clayde.tasks.plan.invoke_claude", side_effect=UsageLimitError("limit", cost_eur=0.30)), \
              patch("clayde.tasks.plan.update_issue_state") as mock_update, \
@@ -453,13 +447,12 @@ class TestRunUpdate:
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
-             patch("clayde.tasks.plan.get_settings", return_value=_mock_settings()), \
              patch("clayde.tasks.plan.fetch_issue") as mock_fi, \
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan.fetch_comment") as mock_fc, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[old_comment]), \
-             patch("clayde.tasks.plan.filter_comments", return_value=[old_comment]), \
+             patch("clayde.tasks.plan.get_new_visible_comments", return_value=[]), \
              patch("clayde.tasks.plan.is_issue_visible", return_value=True), \
              patch("clayde.tasks.plan.invoke_claude") as mock_claude:
             mock_fc.return_value.body = "plan"
@@ -480,13 +473,12 @@ class TestRunUpdate:
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
-             patch("clayde.tasks.plan.get_settings", return_value=_mock_settings()), \
              patch("clayde.tasks.plan.fetch_issue") as mock_fi, \
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan.fetch_comment") as mock_fc, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[clayde_comment]), \
-             patch("clayde.tasks.plan.filter_comments", return_value=[clayde_comment]), \
+             patch("clayde.tasks.plan.get_new_visible_comments", return_value=[]), \
              patch("clayde.tasks.plan.is_issue_visible", return_value=True), \
              patch("clayde.tasks.plan.invoke_claude") as mock_claude:
             mock_fc.return_value.body = "plan"

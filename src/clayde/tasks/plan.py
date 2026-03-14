@@ -12,7 +12,7 @@ from github import Github
 from github.Issue import Issue
 
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
-from clayde.config import get_github_client, get_settings
+from clayde.config import get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
     edit_comment,
@@ -24,7 +24,7 @@ from clayde.github import (
     post_comment,
 )
 from clayde.prompts import collect_comments_after, render_template
-from clayde.safety import filter_comments, is_issue_visible
+from clayde.safety import filter_comments, get_new_visible_comments, is_issue_visible
 from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
@@ -226,14 +226,7 @@ def run_update(issue_url: str, phase: str) -> None:
         current_plan_text = plan_comment.body
 
         all_comments = fetch_issue_comments(g, owner, repo, number)
-        visible_comments = filter_comments(all_comments)
-
-        # Get new visible comments since last seen
-        github_username = get_settings().github_username
-        new_comments = [
-            c for c in visible_comments
-            if c.id > last_seen and c.user.login != github_username
-        ]
+        new_comments = get_new_visible_comments(all_comments, last_seen)
 
         if not new_comments:
             log.info("No new visible comments for issue #%d — skipping update", number)

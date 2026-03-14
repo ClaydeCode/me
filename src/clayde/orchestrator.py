@@ -33,7 +33,7 @@ from clayde.github import (
     is_blocked,
     parse_issue_url,
 )
-from clayde.safety import filter_comments, has_visible_content, is_plan_approved
+from clayde.safety import get_new_visible_comments, has_visible_content, is_plan_approved
 from clayde.state import IssueStatus, get_issue_state, load_state, update_issue_state
 from clayde.tasks import implement, plan, review
 from clayde.telemetry import get_tracer, init_tracer
@@ -187,17 +187,10 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
 
 
 def _has_new_comments(g: Github, owner: str, repo: str, number: int, issue_state: dict) -> bool:
-    """Check if there are new visible comments from non-Clayde users."""
+    """Return True if there are new visible comments from non-Clayde users."""
     last_seen = issue_state.get("last_seen_comment_id", 0)
-    github_username = get_settings().github_username
-
     comments = fetch_issue_comments(g, owner, repo, number)
-    visible = filter_comments(comments)
-    new_visible = [
-        c for c in visible
-        if c.id > last_seen and c.user.login != github_username
-    ]
-    return len(new_visible) > 0
+    return bool(get_new_visible_comments(comments, last_seen))
 
 
 def main():

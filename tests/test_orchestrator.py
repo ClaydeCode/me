@@ -377,43 +377,15 @@ class TestHasNewComments:
     def test_detects_new_visible_comments(self):
         g = MagicMock()
         comment = MagicMock()
-        comment.id = 200
-        comment.user.login = "alice"
         with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[comment]):
             entry = {"last_seen_comment_id": 100}
             assert _has_new_comments(g, "o", "r", 1, entry) is True
-
-    def test_ignores_clayde_comments(self):
-        g = MagicMock()
-        comment = MagicMock()
-        comment.id = 200
-        comment.user.login = "ClaydeCode"
-        with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
-            entry = {"last_seen_comment_id": 100}
-            assert _has_new_comments(g, "o", "r", 1, entry) is False
 
     def test_no_new_comments(self):
         g = MagicMock()
         comment = MagicMock()
-        comment.id = 50
-        comment.user.login = "alice"
         with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
-            entry = {"last_seen_comment_id": 100}
-            assert _has_new_comments(g, "o", "r", 1, entry) is False
-
-    def test_invisible_comments_ignored(self):
-        g = MagicMock()
-        comment = MagicMock()
-        comment.id = 200
-        comment.user.login = "bob"
-        with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]):
             entry = {"last_seen_comment_id": 100}
             assert _has_new_comments(g, "o", "r", 1, entry) is False
