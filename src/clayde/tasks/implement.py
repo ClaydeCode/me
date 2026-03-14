@@ -7,12 +7,10 @@ status to ``pr_open`` for review monitoring.
 import logging
 import subprocess
 
-from jinja2 import Environment, StrictUndefined
-
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client
 from clayde.git import ensure_repo
-from clayde.prompts import PROMPTS_DIR
+from clayde.prompts import render_template
 from clayde.github import (
     add_pr_reviewer,
     create_pull_request,
@@ -213,9 +211,10 @@ def _collect_discussion(all_comments, plan_comment_id: int) -> str:
     return "\n---\n".join(discussion) or "(none)"
 
 
-def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo: str, number: int, repo_path: str, branch_name: str) -> str:
-    template_src = (PROMPTS_DIR / "implement.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+def _build_prompt(issue, plan_text: str, discussion_text: str, owner: str, repo: str,
+                  number: int, repo_path: str, branch_name: str) -> str:
+    return render_template(
+        "implement.j2",
         number=number,
         title=issue.title,
         owner=owner,

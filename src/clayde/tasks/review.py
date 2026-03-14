@@ -2,12 +2,10 @@
 
 import logging
 
-from jinja2 import Environment, StrictUndefined
-
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client, get_settings
 from clayde.git import ensure_repo
-from clayde.prompts import PROMPTS_DIR
+from clayde.prompts import render_template
 from clayde.github import (
     fetch_issue,
     get_default_branch,
@@ -158,8 +156,8 @@ def _format_reviews(reviews: list, review_comments: list) -> str:
 
 
 def _build_prompt(issue, owner, repo, number, repo_path, branch_name, review_text) -> str:
-    template_src = (PROMPTS_DIR / "address_review.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+    return render_template(
+        "address_review.j2",
         number=number,
         title=issue.title,
         owner=owner,

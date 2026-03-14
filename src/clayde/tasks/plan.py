@@ -7,8 +7,6 @@ Updates: When new visible comments arrive, update the current plan and post a
 """
 
 import logging
-from jinja2 import Environment, StrictUndefined
-
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import get_github_client, get_settings
 from clayde.git import ensure_repo
@@ -21,7 +19,7 @@ from clayde.github import (
     parse_issue_url,
     post_comment,
 )
-from clayde.prompts import PROMPTS_DIR
+from clayde.prompts import render_template
 from clayde.safety import filter_comments, is_issue_visible
 from clayde.state import accumulate_cost, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
@@ -315,8 +313,8 @@ def _build_preliminary_prompt(g, issue, owner: str, repo: str, number: int, repo
     if not is_issue_visible(issue):
         body_text = "(filtered)"
 
-    template_src = (PROMPTS_DIR / "preliminary_plan.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+    return render_template(
+        "preliminary_plan.j2",
         number=number,
         title=issue.title,
         owner=owner,
@@ -336,8 +334,8 @@ def _build_thorough_prompt(g, issue, owner, repo, number, repo_path,
     if not is_issue_visible(issue):
         body_text = "(filtered)"
 
-    template_src = (PROMPTS_DIR / "thorough_plan.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+    return render_template(
+        "thorough_plan.j2",
         number=number,
         title=issue.title,
         owner=owner,
@@ -352,8 +350,8 @@ def _build_thorough_prompt(g, issue, owner, repo, number, repo_path,
 
 def _build_update_prompt(number, title, owner, repo, body, current_plan_text,
                          new_comments_text, repo_path) -> str:
-    template_src = (PROMPTS_DIR / "update_plan.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+    return render_template(
+        "update_plan.j2",
         number=number,
         title=title,
         owner=owner,
