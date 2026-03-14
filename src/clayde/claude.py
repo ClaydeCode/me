@@ -160,24 +160,23 @@ def _commit_wip(repo_path: str, branch_name: str) -> None:
     error (e.g. rate limit) is not masked.
     """
     try:
-        cwd = repo_path
         # Checkout or create the branch
         result = subprocess.run(
             ["git", "checkout", branch_name],
-            cwd=cwd, capture_output=True, text=True,
+            cwd=repo_path, capture_output=True, text=True,
         )
         if result.returncode != 0:
             subprocess.run(
                 ["git", "checkout", "-b", branch_name],
-                cwd=cwd, capture_output=True, text=True, check=True,
+                cwd=repo_path, capture_output=True, text=True, check=True,
             )
 
-        subprocess.run(["git", "add", "-A"], cwd=cwd, capture_output=True, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=repo_path, capture_output=True, check=True)
 
         # Check if there are staged changes
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
-            cwd=cwd, capture_output=True,
+            cwd=repo_path, capture_output=True,
         )
         if result.returncode == 0:
             log.info("No changes to commit as WIP")
@@ -185,11 +184,11 @@ def _commit_wip(repo_path: str, branch_name: str) -> None:
 
         subprocess.run(
             ["git", "commit", "-m", "WIP: interrupted by rate limit"],
-            cwd=cwd, capture_output=True, check=True,
+            cwd=repo_path, capture_output=True, check=True,
         )
         subprocess.run(
             ["git", "push", "--force", "origin", branch_name],
-            cwd=cwd, capture_output=True, check=True,
+            cwd=repo_path, capture_output=True, check=True,
         )
         log.info("WIP committed and pushed to %s", branch_name)
     except Exception as e:
