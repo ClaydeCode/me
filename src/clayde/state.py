@@ -26,21 +26,21 @@ class IssueStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
-def load_state():
+def load_state() -> dict:
     if _STATE_FILE.exists():
         return json.loads(_STATE_FILE.read_text())
     return {"issues": {}}
 
 
-def save_state(state):
+def save_state(state: dict) -> None:
     _STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def get_issue_state(issue_url):
+def get_issue_state(issue_url: str) -> dict:
     return load_state()["issues"].get(issue_url, {})
 
 
-def update_issue_state(issue_url, updates):
+def update_issue_state(issue_url: str, updates: dict) -> None:
     state = load_state()
     entry = state["issues"].setdefault(issue_url, {})
     old_status = entry.get("status")

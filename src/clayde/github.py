@@ -5,6 +5,8 @@ import re
 
 import requests
 from github import Github, GithubException
+from github.Issue import Issue
+from github.IssueComment import IssueComment
 
 from clayde.config import get_settings
 
@@ -22,11 +24,11 @@ def parse_issue_url(url: str) -> tuple[str, str, int]:
     return m.group(1), m.group(2), int(m.group(3))
 
 
-def fetch_issue(g: Github, owner: str, repo: str, number: int):
+def fetch_issue(g: Github, owner: str, repo: str, number: int) -> Issue:
     return _get_repo(g, owner, repo).get_issue(number)
 
 
-def fetch_issue_comments(g: Github, owner: str, repo: str, number: int):
+def fetch_issue_comments(g: Github, owner: str, repo: str, number: int) -> list[IssueComment]:
     return list(_get_repo(g, owner, repo).get_issue(number).get_comments())
 
 
@@ -41,7 +43,7 @@ def edit_comment(g: Github, owner: str, repo: str, number: int, comment_id: int,
     _get_repo(g, owner, repo).get_issue(number).get_comment(comment_id).edit(body)
 
 
-def fetch_comment(g: Github, owner: str, repo: str, number: int, comment_id: int):
+def fetch_comment(g: Github, owner: str, repo: str, number: int, comment_id: int) -> IssueComment:
     return _get_repo(g, owner, repo).get_issue(number).get_comment(comment_id)
 
 

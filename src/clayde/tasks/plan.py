@@ -7,6 +7,10 @@ Updates: When new visible comments arrive, update the current plan and post a
 """
 
 import logging
+
+from github import Github
+from github.Issue import Issue
+
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import get_github_client, get_settings
 from clayde.git import ensure_repo
@@ -293,7 +297,7 @@ def run_update(issue_url: str, phase: str) -> None:
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-def _build_preliminary_prompt(g, issue, owner: str, repo: str, number: int, repo_path: str) -> str:
+def _build_preliminary_prompt(g: Github, issue: Issue, owner: str, repo: str, number: int, repo_path: str) -> str:
     labels = ", ".join(l.name for l in issue.labels) or "none"
     comments = fetch_issue_comments(g, owner, repo, number)
     visible = filter_comments(comments)
@@ -318,8 +322,8 @@ def _build_preliminary_prompt(g, issue, owner: str, repo: str, number: int, repo
     )
 
 
-def _build_thorough_prompt(g, issue, owner, repo, number, repo_path,
-                           preliminary_text, discussion_text) -> str:
+def _build_thorough_prompt(g: Github, issue: Issue, owner: str, repo: str, number: int,
+                           repo_path: str, preliminary_text: str, discussion_text: str) -> str:
     labels = ", ".join(l.name for l in issue.labels) or "none"
 
     body_text = issue.body or "(empty)"
@@ -340,8 +344,8 @@ def _build_thorough_prompt(g, issue, owner, repo, number, repo_path,
     )
 
 
-def _build_update_prompt(number, title, owner, repo, body, current_plan_text,
-                         new_comments_text, repo_path) -> str:
+def _build_update_prompt(number: int, title: str, owner: str, repo: str, body: str,
+                         current_plan_text: str, new_comments_text: str, repo_path: str) -> str:
     return render_template(
         "update_plan.j2",
         number=number,

@@ -21,6 +21,9 @@ import time
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
+from github import Github
+from github.Issue import Issue
+
 from clayde.claude import is_claude_available
 from clayde.config import get_github_client, get_settings, setup_logging
 from clayde.github import (
@@ -45,7 +48,7 @@ _STATUS_COMPAT = {
 }
 
 
-def _handle_new_issue(g, issue, url: str) -> None:
+def _handle_new_issue(g: Github, issue: Issue, url: str) -> None:
     """Handle a newly assigned issue — check for visible content and blocked state."""
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": "new"}) as span:
@@ -81,7 +84,7 @@ def _handle_new_issue(g, issue, url: str) -> None:
             update_issue_state(url, {"status": IssueStatus.FAILED})
 
 
-def _handle_awaiting_approval(g, url: str, issue_state: dict, *, phase: str) -> None:
+def _handle_awaiting_approval(g: Github, url: str, issue_state: dict, *, phase: str) -> None:
     """Handle awaiting_*_approval states — check for 👍 or new comments.
 
     Args:
@@ -135,7 +138,7 @@ def _handle_awaiting_approval(g, url: str, issue_state: dict, *, phase: str) -> 
         span.set_attribute("issue.skip_reason", "not_approved")
 
 
-def _handle_pr_open(g, url: str, issue_state: dict) -> None:
+def _handle_pr_open(g: Github, url: str, issue_state: dict) -> None:
     """Handle pr_open — check for new reviews on the PR."""
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": "pr_open"}) as span:
@@ -183,7 +186,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
             update_issue_state(url, {"status": IssueStatus.INTERRUPTED})
 
 
-def _has_new_comments(g, owner: str, repo: str, number: int, issue_state: dict) -> bool:
+def _has_new_comments(g: Github, owner: str, repo: str, number: int, issue_state: dict) -> bool:
     """Check if there are new visible comments from non-Clayde users."""
     last_seen = issue_state.get("last_seen_comment_id", 0)
     github_username = get_settings().github_username
