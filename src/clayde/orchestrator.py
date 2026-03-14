@@ -31,7 +31,7 @@ from clayde.github import (
     parse_issue_url,
 )
 from clayde.safety import filter_comments, has_visible_content, is_plan_approved
-from clayde.state import get_issue_state, load_state, update_issue_state
+from clayde.state import IssueStatus, get_issue_state, load_state, update_issue_state
 from clayde.tasks import implement, plan, review
 from clayde.telemetry import get_tracer, init_tracer
 
@@ -41,7 +41,7 @@ _shutdown = False
 
 # Backward compatibility: treat old status names as their new equivalents
 _STATUS_COMPAT = {
-    "awaiting_approval": "awaiting_plan_approval",
+    "awaiting_approval": IssueStatus.AWAITING_PLAN_APPROVAL,
 }
 
 
@@ -78,7 +78,7 @@ def _handle_new_issue(g, issue, url: str) -> None:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
-            update_issue_state(url, {"status": "failed"})
+            update_issue_state(url, {"status": IssueStatus.FAILED})
 
 
 def _handle_awaiting_approval(g, url: str, entry: dict, *, phase: str) -> None:
@@ -102,7 +102,7 @@ def _handle_awaiting_approval(g, url: str, entry: dict, *, phase: str) -> None:
 
         if not comment_id:
             log.warning("No %s for %s — marking as failed", comment_id_key, url)
-            update_issue_state(url, {"status": "failed"})
+            update_issue_state(url, {"status": IssueStatus.FAILED})
             return
 
         # Check for new visible comments first (plan update)
@@ -127,7 +127,7 @@ def _handle_awaiting_approval(g, url: str, entry: dict, *, phase: str) -> None:
                 log.error("ERROR in %s for %s: %s", next_task_label, url, e)
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
-                update_issue_state(url, {"status": "failed"})
+                update_issue_state(url, {"status": IssueStatus.FAILED})
             return
 
         log.info("Issue %s awaiting %s approval", url, phase)
@@ -149,7 +149,7 @@ def _handle_pr_open(g, url: str, entry: dict) -> None:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
-            update_issue_state(url, {"status": "failed"})
+            update_issue_state(url, {"status": IssueStatus.FAILED})
 
 
 def _handle_interrupted(url: str, entry: dict) -> None:
@@ -160,10 +160,10 @@ def _handle_interrupted(url: str, entry: dict) -> None:
         log.info("Retrying interrupted issue %s (phase: %s)", url, phase)
 
         task_map = {
-            "preliminary_planning": plan.run_preliminary,
-            "planning": plan.run_thorough,
-            "implementing": implement.run,
-            "addressing_review": review.run,
+            IssueStatus.PRELIMINARY_PLANNING: plan.run_preliminary,
+            IssueStatus.PLANNING: plan.run_thorough,
+            IssueStatus.IMPLEMENTING: implement.run,
+            IssueStatus.ADDRESSING_REVIEW: review.run,
         }
         task = task_map.get(phase)
         if task is None:
@@ -180,7 +180,7 @@ def _handle_interrupted(url: str, entry: dict) -> None:
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
             # Stay in interrupted state so we keep retrying.
-            update_issue_state(url, {"status": "interrupted"})
+            update_issue_state(url, {"status": IssueStatus.INTERRUPTED})
 
 
 def _has_new_comments(g, owner: str, repo: str, number: int, entry: dict) -> bool:
@@ -239,22 +239,27 @@ def main():
             status = _STATUS_COMPAT.get(status, status)
 
             # Skip in-progress or completed states
-            if status in ("done", "preliminary_planning", "planning",
-                          "implementing", "addressing_review"):
+            if status in (
+                IssueStatus.DONE,
+                IssueStatus.PRELIMINARY_PLANNING,
+                IssueStatus.PLANNING,
+                IssueStatus.IMPLEMENTING,
+                IssueStatus.ADDRESSING_REVIEW,
+            ):
                 continue
 
             processed += 1
             if status is None:
                 _handle_new_issue(g, issue, url)
-            elif status == "awaiting_preliminary_approval":
+            elif status == IssueStatus.AWAITING_PRELIMINARY_APPROVAL:
                 _handle_awaiting_approval(g, url, entry, phase="preliminary")
-            elif status == "awaiting_plan_approval":
+            elif status == IssueStatus.AWAITING_PLAN_APPROVAL:
                 _handle_awaiting_approval(g, url, entry, phase="thorough")
-            elif status == "pr_open":
+            elif status == IssueStatus.PR_OPEN:
                 _handle_pr_open(g, url, entry)
-            elif status == "interrupted":
+            elif status == IssueStatus.INTERRUPTED:
                 _handle_interrupted(url, entry)
-            elif status == "failed":
+            elif status == IssueStatus.FAILED:
                 log.info("Skipping failed issue: %s (clear state to retry)", url)
 
         tick_span.set_attribute("issues.processed", processed)

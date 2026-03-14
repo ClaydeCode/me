@@ -21,7 +21,7 @@ from clayde.github import (
 )
 from clayde.prompts import collect_comments_after, render_template
 from clayde.safety import filter_comments, is_issue_visible
-from clayde.state import accumulate_cost, pop_accumulated_cost, update_issue_state
+from clayde.state import IssueStatus, accumulate_cost, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.plan")
@@ -43,7 +43,7 @@ def run_preliminary(issue_url: str) -> None:
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
         update_issue_state(issue_url, {
-            "status": "preliminary_planning",
+            "status": IssueStatus.PRELIMINARY_PLANNING,
             "owner": owner, "repo": repo, "number": number,
         })
 
@@ -61,8 +61,8 @@ def run_preliminary(issue_url: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "preliminary_planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING,
             })
             return
 
@@ -73,7 +73,7 @@ def run_preliminary(issue_url: str) -> None:
         if not plan_text.strip():
             log.error("Claude returned empty preliminary plan for issue #%d", number)
             span.set_attribute("plan.status", "empty")
-            update_issue_state(issue_url, {"status": "failed"})
+            update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
 
         if len(plan_text.strip()) < 100:
@@ -81,8 +81,8 @@ def run_preliminary(issue_url: str) -> None:
                         number, len(plan_text.strip()))
             span.set_attribute("plan.status", "short")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "preliminary_planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING,
             })
             return
 
@@ -93,7 +93,7 @@ def run_preliminary(issue_url: str) -> None:
         last_comment_id = all_comments[-1].id if all_comments else 0
 
         update_issue_state(issue_url, {
-            "status": "awaiting_preliminary_approval",
+            "status": IssueStatus.AWAITING_PRELIMINARY_APPROVAL,
             "preliminary_comment_id": comment_id,
             "last_seen_comment_id": last_comment_id,
         })
@@ -114,7 +114,7 @@ def run_thorough(issue_url: str) -> None:
         span.set_attribute("issue.number", number)
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
-        update_issue_state(issue_url, {"status": "planning"})
+        update_issue_state(issue_url, {"status": IssueStatus.PLANNING})
 
         issue = fetch_issue(g, owner, repo, number)
         default_branch = get_default_branch(g, owner, repo)
@@ -144,8 +144,8 @@ def run_thorough(issue_url: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PLANNING,
             })
             return
 
@@ -156,7 +156,7 @@ def run_thorough(issue_url: str) -> None:
         if not plan_text.strip():
             log.error("Claude returned empty thorough plan for issue #%d", number)
             span.set_attribute("plan.status", "empty")
-            update_issue_state(issue_url, {"status": "failed"})
+            update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
 
         if len(plan_text.strip()) < 200:
@@ -164,8 +164,8 @@ def run_thorough(issue_url: str) -> None:
                         number, len(plan_text.strip()))
             span.set_attribute("plan.status", "short")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PLANNING,
             })
             return
 
@@ -176,7 +176,7 @@ def run_thorough(issue_url: str) -> None:
         last_comment_id = all_comments[-1].id if all_comments else 0
 
         update_issue_state(issue_url, {
-            "status": "awaiting_plan_approval",
+            "status": IssueStatus.AWAITING_PLAN_APPROVAL,
             "plan_comment_id": comment_id,
             "last_seen_comment_id": last_comment_id,
         })
@@ -256,8 +256,8 @@ def run_update(issue_url: str, phase: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.update_status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": f"{phase}_planning" if phase == "preliminary" else "planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING if phase == "preliminary" else IssueStatus.PLANNING,
             })
             return
 

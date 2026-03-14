@@ -26,7 +26,7 @@ from clayde.github import (
     post_comment,
 )
 from clayde.safety import filter_comments
-from clayde.state import accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
+from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.implement")
@@ -59,7 +59,7 @@ def run(issue_url: str) -> None:
                 )
                 return
 
-        update_issue_state(issue_url, {"status": "implementing"})
+        update_issue_state(issue_url, {"status": IssueStatus.IMPLEMENTING})
 
         issue = fetch_issue(g, owner, repo, number)
         default_branch = get_default_branch(g, owner, repo)
@@ -97,7 +97,7 @@ def run(issue_url: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             log.info("Conversation saved to %s", conv_path)
             span.set_attribute("implement.status", "limit")
-            update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing"})
+            update_issue_state(issue_url, {"status": IssueStatus.INTERRUPTED, "interrupted_phase": IssueStatus.IMPLEMENTING})
             return
 
         output = result.output
@@ -135,7 +135,7 @@ def run(issue_url: str) -> None:
                              "Implementation failed to produce a PR after multiple retries. "
                              "Marking as failed — manual intervention needed.")
                 span.set_attribute("implement.status", "failed")
-                update_issue_state(issue_url, {"status": "failed", "retry_count": retry_count})
+                update_issue_state(issue_url, {"status": IssueStatus.FAILED, "retry_count": retry_count})
             else:
                 post_comment(g, owner, repo, number,
                              f"Implementation ran but no PR was created "
@@ -143,7 +143,7 @@ def run(issue_url: str) -> None:
                              "I'll retry on the next cycle.")
                 span.set_attribute("implement.status", "no_pr")
                 span.set_attribute("implement.retry_count", retry_count)
-                update_issue_state(issue_url, {"status": "interrupted", "interrupted_phase": "implementing",
+                update_issue_state(issue_url, {"status": IssueStatus.INTERRUPTED, "interrupted_phase": IssueStatus.IMPLEMENTING,
                                                "retry_count": retry_count})
 
 
@@ -161,7 +161,7 @@ def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
         log.warning("Failed to assign reviewer for PR %s: %s", pr_url, e)
 
     update_issue_state(issue_url, {
-        "status": "pr_open",
+        "status": IssueStatus.PR_OPEN,
         "pr_url": pr_url,
         "last_seen_review_id": 0,
     })

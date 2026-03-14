@@ -2,6 +2,7 @@
 
 import json
 import logging
+from enum import StrEnum
 
 from opentelemetry import trace
 
@@ -10,6 +11,19 @@ from clayde.config import DATA_DIR
 log = logging.getLogger("clayde.state")
 
 _STATE_FILE = DATA_DIR / "state.json"
+
+
+class IssueStatus(StrEnum):
+    PRELIMINARY_PLANNING = "preliminary_planning"
+    AWAITING_PRELIMINARY_APPROVAL = "awaiting_preliminary_approval"
+    PLANNING = "planning"
+    AWAITING_PLAN_APPROVAL = "awaiting_plan_approval"
+    IMPLEMENTING = "implementing"
+    PR_OPEN = "pr_open"
+    ADDRESSING_REVIEW = "addressing_review"
+    DONE = "done"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 def load_state():

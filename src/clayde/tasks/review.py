@@ -15,7 +15,7 @@ from clayde.github import (
     parse_pr_url,
     post_comment,
 )
-from clayde.state import accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
+from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.review")
@@ -76,7 +76,7 @@ def run(issue_url: str) -> None:
             approved = any(r.state == "APPROVED" for r in new_reviews)
             if approved:
                 log.info("PR #%d approved for issue #%d — marking as done", pr_number, number)
-                update_issue_state(issue_url, {"status": "done"})
+                update_issue_state(issue_url, {"status": IssueStatus.DONE})
                 span.set_attribute("review.status", "approved")
             return
 
@@ -86,7 +86,7 @@ def run(issue_url: str) -> None:
         log.info("Addressing %d new review(s) on PR #%d for issue #%d",
                  len(new_reviews), pr_number, number)
 
-        update_issue_state(issue_url, {"status": "addressing_review"})
+        update_issue_state(issue_url, {"status": IssueStatus.ADDRESSING_REVIEW})
 
         issue = fetch_issue(g, owner, repo, number)
         default_branch = get_default_branch(g, owner, repo)
@@ -112,8 +112,8 @@ def run(issue_url: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("review.status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "addressing_review",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.ADDRESSING_REVIEW,
             })
             return
 
@@ -128,7 +128,7 @@ def run(issue_url: str) -> None:
         # Update last seen review ID and return to pr_open
         max_review_id = max(r.id for r in new_reviews)
         update_issue_state(issue_url, {
-            "status": "pr_open",
+            "status": IssueStatus.PR_OPEN,
             "last_seen_review_id": max_review_id,
         })
         span.set_attribute("review.status", "addressed")
