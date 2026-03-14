@@ -323,7 +323,7 @@ class TestRunThorough:
              patch("clayde.tasks.plan.fetch_issue") as mock_fi, \
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
-             patch("clayde.state.get_issue_state", return_value={"preliminary_comment_id": 100}), \
+             patch("clayde.tasks.plan.get_issue_state", return_value={"preliminary_comment_id": 100}), \
              patch("clayde.tasks.plan.fetch_comment") as mock_fc, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
              patch("clayde.tasks.plan.filter_comments", return_value=[]), \
@@ -350,7 +350,7 @@ class TestRunThorough:
              patch("clayde.tasks.plan.fetch_issue"), \
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
-             patch("clayde.state.get_issue_state", return_value={"preliminary_comment_id": 100}), \
+             patch("clayde.tasks.plan.get_issue_state", return_value={"preliminary_comment_id": 100}), \
              patch("clayde.tasks.plan.fetch_comment") as mock_fc, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[]), \
              patch("clayde.tasks.plan.filter_comments", return_value=[]), \
@@ -378,7 +378,7 @@ class TestRunUpdate:
 
         with patch("clayde.tasks.plan.get_github_client") as mock_gc, \
              patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
-             patch("clayde.state.get_issue_state", return_value={
+             patch("clayde.tasks.plan.get_issue_state", return_value={
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
@@ -418,7 +418,7 @@ class TestRunUpdate:
 
         with patch("clayde.tasks.plan.get_github_client"), \
              patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
-             patch("clayde.state.get_issue_state", return_value={
+             patch("clayde.tasks.plan.get_issue_state", return_value={
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
@@ -449,7 +449,7 @@ class TestRunUpdate:
 
         with patch("clayde.tasks.plan.get_github_client"), \
              patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
-             patch("clayde.state.get_issue_state", return_value={
+             patch("clayde.tasks.plan.get_issue_state", return_value={
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
@@ -476,7 +476,7 @@ class TestRunUpdate:
 
         with patch("clayde.tasks.plan.get_github_client"), \
              patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
-             patch("clayde.state.get_issue_state", return_value={
+             patch("clayde.tasks.plan.get_issue_state", return_value={
                  "preliminary_comment_id": 100,
                  "last_seen_comment_id": 200,
              }), \
