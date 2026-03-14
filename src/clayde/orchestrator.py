@@ -81,92 +81,56 @@ def _handle_new_issue(g, issue, url: str) -> None:
             update_issue_state(url, {"status": "failed"})
 
 
-def _handle_awaiting_preliminary(g, url: str, entry: dict) -> None:
-    """Handle awaiting_preliminary_approval — check for 👍 or new comments."""
+def _handle_awaiting_approval(g, url: str, entry: dict, *, phase: str) -> None:
+    """Handle awaiting_*_approval states — check for 👍 or new comments.
+
+    Args:
+        phase: Either "preliminary" or "thorough".
+    """
+    comment_id_key = "preliminary_comment_id" if phase == "preliminary" else "plan_comment_id"
+    update_phase = phase
+    next_task = plan.run_thorough if phase == "preliminary" else implement.run
+    next_task_label = "thorough_plan" if phase == "preliminary" else "implement"
+
     tracer = get_tracer()
-    with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": "awaiting_preliminary_approval"}) as span:
+    with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": f"awaiting_{phase}_approval"}) as span:
         owner = entry["owner"]
         repo = entry["repo"]
         number = entry["number"]
-        comment_id = entry.get("preliminary_comment_id")
+        comment_id = entry.get(comment_id_key)
         span.set_attribute("issue.number", number)
 
         if not comment_id:
-            log.warning("No preliminary_comment_id for %s — marking as failed", url)
+            log.warning("No %s for %s — marking as failed", comment_id_key, url)
             update_issue_state(url, {"status": "failed"})
             return
 
         # Check for new visible comments first (plan update)
         if _has_new_comments(g, owner, repo, number, entry):
-            log.info("New comments on %s — updating preliminary plan", url)
+            log.info("New comments on %s — updating %s plan", url, phase)
             try:
-                plan.run_update(url, "preliminary")
+                plan.run_update(url, update_phase)
                 span.set_attribute("issue.action", "plan_update")
             except Exception as e:
-                log.error("ERROR updating preliminary plan for %s: %s", url, e)
+                log.error("ERROR updating %s plan for %s: %s", phase, url, e)
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
             return
 
-        # Check for approval (👍 on preliminary plan comment)
+        # Check for approval (👍 on plan comment)
         if is_plan_approved(g, owner, repo, number, comment_id):
-            log.info("Preliminary plan approved: %s — starting thorough plan", url)
+            log.info("%s plan approved: %s — running %s", phase.capitalize(), url, next_task_label)
             try:
-                plan.run_thorough(url)
-                span.set_attribute("issue.action", "thorough_plan")
+                next_task(url)
+                span.set_attribute("issue.action", next_task_label)
             except Exception as e:
-                log.error("ERROR in thorough plan for %s: %s", url, e)
+                log.error("ERROR in %s for %s: %s", next_task_label, url, e)
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 update_issue_state(url, {"status": "failed"})
             return
 
-        log.info("Issue %s awaiting preliminary approval", url)
-        span.set_attribute("issue.skipped", True)
-        span.set_attribute("issue.skip_reason", "not_approved")
-
-
-def _handle_awaiting_plan(g, url: str, entry: dict) -> None:
-    """Handle awaiting_plan_approval — check for 👍 or new comments."""
-    tracer = get_tracer()
-    with tracer.start_as_current_span("clayde.handle_issue", attributes={"issue.url": url, "issue.handler": "awaiting_plan_approval"}) as span:
-        owner = entry["owner"]
-        repo = entry["repo"]
-        number = entry["number"]
-        comment_id = entry.get("plan_comment_id")
-        span.set_attribute("issue.number", number)
-
-        if not comment_id:
-            log.warning("No plan_comment_id for %s — marking as failed", url)
-            update_issue_state(url, {"status": "failed"})
-            return
-
-        # Check for new visible comments first (plan update)
-        if _has_new_comments(g, owner, repo, number, entry):
-            log.info("New comments on %s — updating thorough plan", url)
-            try:
-                plan.run_update(url, "thorough")
-                span.set_attribute("issue.action", "plan_update")
-            except Exception as e:
-                log.error("ERROR updating thorough plan for %s: %s", url, e)
-                span.set_status(StatusCode.ERROR, str(e))
-                span.record_exception(e)
-            return
-
-        # Check for approval (👍 on thorough plan comment)
-        if is_plan_approved(g, owner, repo, number, comment_id):
-            log.info("Plan approved: %s — starting implementation", url)
-            try:
-                implement.run(url)
-                span.set_attribute("issue.action", "implement")
-            except Exception as e:
-                log.error("ERROR in implement for %s: %s", url, e)
-                span.set_status(StatusCode.ERROR, str(e))
-                span.record_exception(e)
-                update_issue_state(url, {"status": "failed"})
-            return
-
-        log.info("Issue %s awaiting plan approval", url)
+        log.info("Issue %s awaiting %s approval", url, phase)
         span.set_attribute("issue.skipped", True)
         span.set_attribute("issue.skip_reason", "not_approved")
 
@@ -283,9 +247,9 @@ def main():
             if status is None:
                 _handle_new_issue(g, issue, url)
             elif status == "awaiting_preliminary_approval":
-                _handle_awaiting_preliminary(g, url, entry)
+                _handle_awaiting_approval(g, url, entry, phase="preliminary")
             elif status == "awaiting_plan_approval":
-                _handle_awaiting_plan(g, url, entry)
+                _handle_awaiting_approval(g, url, entry, phase="thorough")
             elif status == "pr_open":
                 _handle_pr_open(g, url, entry)
             elif status == "interrupted":
