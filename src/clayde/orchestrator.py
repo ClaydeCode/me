@@ -201,6 +201,8 @@ def _has_new_comments(g: Github, owner: str, repo: str, number: int, issue_state
 
 
 def main():
+    setup_logging()
+
     settings = get_settings()
 
     if not settings.enabled:
@@ -208,7 +210,6 @@ def main():
 
     os.environ["GH_TOKEN"] = settings.github_token
 
-    setup_logging()
     provider = init_tracer()
     tracer = get_tracer()
 

@@ -24,7 +24,8 @@ def _mock_settings(enabled=False, github_token="tok", github_username="ClaydeCod
 
 class TestMain:
     def test_exits_when_disabled(self):
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=False)):
+        with patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=False)):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
