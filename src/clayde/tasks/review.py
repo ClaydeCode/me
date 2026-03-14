@@ -97,15 +97,14 @@ def run(issue_url: str) -> None:
             issue, owner, repo, number, repo_path, branch_name, review_text,
         )
 
-        conv_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}-review.json"
-        conv_path.parent.mkdir(parents=True, exist_ok=True)
+        conversation_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}-review.json"
 
         try:
             result = invoke_claude(
                 prompt,
                 repo_path,
                 branch_name=branch_name,
-                conversation_path=conv_path,
+                conversation_path=conversation_path,
             )
         except UsageLimitError as e:
             log.warning("Usage limit hit during review handling #%d", number)

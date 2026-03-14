@@ -126,8 +126,6 @@ def _prepare_implementation_context(g, owner, repo, number, issue_url, issue_sta
     prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
 
     conversation_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}.json"
-    conversation_path.parent.mkdir(parents=True, exist_ok=True)
-
     return issue, default_branch, repo_path, branch_name, prompt, conversation_path
 
 
