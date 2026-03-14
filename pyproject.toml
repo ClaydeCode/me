@@ -20,6 +20,7 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 clayde = "clayde.orchestrator:run_loop"
 clayde-once = "clayde.orchestrator:main"
+clayde-ctl = "clayde.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
