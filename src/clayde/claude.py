@@ -27,7 +27,7 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
     "claude-3-opus-20240229": (15.0, 75.0),
 }
 
-# EUR/USD conversion rate — update periodically.
+# EUR/USD conversion rate — last updated: 2026-03
 _EUR_PER_USD = 0.92
 
 
