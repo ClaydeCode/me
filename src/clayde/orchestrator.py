@@ -194,12 +194,12 @@ def _has_new_comments(g: Github, owner: str, repo: str, number: int, issue_state
 
 
 def main():
-    setup_logging()
-
     settings = get_settings()
 
     if not settings.enabled:
         sys.exit(0)
+
+    log.info("=== Starting Clayde Tick ===")
 
     os.environ["GH_TOKEN"] = settings.github_token
 
