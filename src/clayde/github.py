@@ -11,6 +11,10 @@ from clayde.config import get_settings
 log = logging.getLogger("clayde.github")
 
 
+def _get_repo(g: Github, owner: str, repo: str):
+    return g.get_repo(f"{owner}/{repo}")
+
+
 def parse_issue_url(url: str) -> tuple[str, str, int]:
     m = re.match(r"https://github\.com/([^/]+)/([^/]+)/issues/(\d+)", url)
     if not m:
@@ -19,30 +23,30 @@ def parse_issue_url(url: str) -> tuple[str, str, int]:
 
 
 def fetch_issue(g: Github, owner: str, repo: str, number: int):
-    return g.get_repo(f"{owner}/{repo}").get_issue(number)
+    return _get_repo(g, owner, repo).get_issue(number)
 
 
 def fetch_issue_comments(g: Github, owner: str, repo: str, number: int):
-    return list(g.get_repo(f"{owner}/{repo}").get_issue(number).get_comments())
+    return list(_get_repo(g, owner, repo).get_issue(number).get_comments())
 
 
 def post_comment(g: Github, owner: str, repo: str, number: int, body: str) -> int:
     """Post a comment on an issue and return the comment ID."""
-    comment = g.get_repo(f"{owner}/{repo}").get_issue(number).create_comment(body)
+    comment = _get_repo(g, owner, repo).get_issue(number).create_comment(body)
     return comment.id
 
 
 def edit_comment(g: Github, owner: str, repo: str, number: int, comment_id: int, body: str) -> None:
     """Edit an existing issue comment."""
-    g.get_repo(f"{owner}/{repo}").get_issue(number).get_comment(comment_id).edit(body)
+    _get_repo(g, owner, repo).get_issue(number).get_comment(comment_id).edit(body)
 
 
 def fetch_comment(g: Github, owner: str, repo: str, number: int, comment_id: int):
-    return g.get_repo(f"{owner}/{repo}").get_issue(number).get_comment(comment_id)
+    return _get_repo(g, owner, repo).get_issue(number).get_comment(comment_id)
 
 
 def get_default_branch(g: Github, owner: str, repo: str) -> str:
-    return g.get_repo(f"{owner}/{repo}").default_branch
+    return _get_repo(g, owner, repo).default_branch
 
 
 def get_assigned_issues(g: Github) -> list:
@@ -64,7 +68,7 @@ def extract_branch_name(plan_text: str, number: int) -> str:
 
 def find_open_pr(g: Github, owner: str, repo: str, branch_name: str) -> str | None:
     """Return the HTML URL of an open PR for the given branch, or None."""
-    pulls = list(g.get_repo(f"{owner}/{repo}").get_pulls(
+    pulls = list(_get_repo(g, owner, repo).get_pulls(
         state="open", head=f"{owner}:{branch_name}"
     ))
     return pulls[0].html_url if pulls else None
@@ -75,7 +79,7 @@ def create_pull_request(
     title: str, body: str, head: str, base: str,
 ) -> str:
     """Create a pull request and return its HTML URL."""
-    pr = g.get_repo(f"{owner}/{repo}").create_pull(
+    pr = _get_repo(g, owner, repo).create_pull(
         title=title, body=body, head=head, base=base,
     )
     return pr.html_url
@@ -95,7 +99,7 @@ def is_blocked(g: Github, owner: str, repo: str, number: int) -> bool:
     Also parses the issue body for "blocked by #N" / "depends on #N" text
     patterns as a fallback.
     """
-    issue = g.get_repo(f"{owner}/{repo}").get_issue(number)
+    issue = _get_repo(g, owner, repo).get_issue(number)
 
     # Check body text for blocking patterns
     if issue.body:
@@ -130,7 +134,7 @@ def _has_blocking_references(g: Github, owner: str, repo: str, body: str) -> boo
     for m in re.finditer(patterns[0], body, re.IGNORECASE):
         ref_number = int(m.group(1))
         try:
-            ref_issue = g.get_repo(f"{owner}/{repo}").get_issue(ref_number)
+            ref_issue = _get_repo(g, owner, repo).get_issue(ref_number)
             if ref_issue.state == "open":
                 log.info("Issue %s/%s#%d is blocked by #%d (open)", owner, repo,
                          ref_number, ref_number)
@@ -211,7 +215,7 @@ def _has_blocking_sub_issue_parents(token: str, owner: str, repo: str, number: i
 def add_pr_reviewer(g: Github, owner: str, repo: str, pr_number: int, reviewer_login: str) -> None:
     """Request a review from the specified user on a PR."""
     try:
-        pr = g.get_repo(f"{owner}/{repo}").get_pull(pr_number)
+        pr = _get_repo(g, owner, repo).get_pull(pr_number)
         pr.create_review_request(reviewers=[reviewer_login])
         log.info("Requested review from %s on PR #%d", reviewer_login, pr_number)
     except GithubException as e:
@@ -220,12 +224,12 @@ def add_pr_reviewer(g: Github, owner: str, repo: str, pr_number: int, reviewer_l
 
 def get_pr_reviews(g: Github, owner: str, repo: str, pr_number: int) -> list:
     """Return all reviews on a PR."""
-    return list(g.get_repo(f"{owner}/{repo}").get_pull(pr_number).get_reviews())
+    return list(_get_repo(g, owner, repo).get_pull(pr_number).get_reviews())
 
 
 def get_pr_review_comments(g: Github, owner: str, repo: str, pr_number: int) -> list:
     """Return all review comments (inline) on a PR."""
-    return list(g.get_repo(f"{owner}/{repo}").get_pull(pr_number).get_review_comments())
+    return list(_get_repo(g, owner, repo).get_pull(pr_number).get_review_comments())
 
 
 def parse_pr_url(url: str) -> tuple[str, str, int]:
@@ -238,5 +242,5 @@ def parse_pr_url(url: str) -> tuple[str, str, int]:
 
 def get_issue_author(g: Github, owner: str, repo: str, number: int) -> str:
     """Return the login of the issue author."""
-    issue = g.get_repo(f"{owner}/{repo}").get_issue(number)
+    issue = _get_repo(g, owner, repo).get_issue(number)
     return issue.user.login
