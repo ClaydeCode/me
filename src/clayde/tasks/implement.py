@@ -6,6 +6,7 @@ status to ``pr_open`` for review monitoring.
 
 import logging
 import subprocess
+from pathlib import Path
 
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client, get_settings
@@ -38,51 +39,21 @@ def run(issue_url: str) -> None:
         g = get_github_client()
         owner, repo, number = parse_issue_url(issue_url)
         issue_state = get_issue_state(issue_url)
-        plan_comment_id = issue_state["plan_comment_id"]
         span.set_attribute("issue.number", number)
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
 
-        resumed = issue_state.get("status") == "interrupted"
+        resumed = issue_state.get("status") == IssueStatus.INTERRUPTED
         span.set_attribute("implement.resumed_from_interrupted", resumed)
 
-        # If resuming from an interrupted implementation, check for an existing PR.
-        if resumed:
-            branch_name = issue_state.get("branch_name", f"clayde/issue-{number}")
-            existing_pr = find_open_pr(g, owner, repo, branch_name)
-            if existing_pr:
-                log.info("Resuming interrupted #%d — found existing PR %s", number, existing_pr)
-                accumulated = pop_accumulated_cost(issue_url)
-                _assign_reviewer_and_finish(
-                    g, owner, repo, number, issue_url, existing_pr, span,
-                    cost_eur=accumulated if accumulated > 0 else None,
-                )
-                return
+        if resumed and _try_resume_from_existing_pr(g, owner, repo, number, issue_url, issue_state, span):
+            return
 
         update_issue_state(issue_url, {"status": IssueStatus.IMPLEMENTING})
 
-        issue = fetch_issue(g, owner, repo, number)
-        default_branch = get_default_branch(g, owner, repo)
-        repo_path = ensure_repo(owner, repo, default_branch)
-
-        plan_comment = fetch_comment(g, owner, repo, number, plan_comment_id)
-        plan_text = plan_comment.body
-
-        branch_name = issue_state.get("branch_name") or extract_branch_name(plan_text, number)
-        update_issue_state(issue_url, {"branch_name": branch_name})
-
-        # If resuming an interrupted implementation, checkout the WIP branch
-        if resumed and branch_name:
-            _checkout_wip_branch(repo_path, branch_name)
-
-        all_comments = fetch_issue_comments(g, owner, repo, number)
-        visible_comments = filter_comments(all_comments)
-        discussion_text = collect_comments_after(visible_comments, plan_comment_id)
-
-        prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
-
-        conv_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}.json"
-        conv_path.parent.mkdir(parents=True, exist_ok=True)
+        issue, default_branch, repo_path, branch_name, prompt, conversation_path = (
+            _prepare_implementation_context(g, owner, repo, number, issue_url, issue_state, resumed)
+        )
 
         log.info("Invoking Claude for implementation of issue #%d", number)
         try:
@@ -90,61 +61,120 @@ def run(issue_url: str) -> None:
                 prompt,
                 repo_path,
                 branch_name=branch_name,
-                conversation_path=conv_path,
+                conversation_path=conversation_path,
             )
         except UsageLimitError as e:
             log.warning("Usage limit hit during implementation #%d — will retry next cycle", number)
             accumulate_cost(issue_url, e.cost_eur)
-            log.info("Conversation saved to %s", conv_path)
             span.set_attribute("implement.status", "limit")
-            update_issue_state(issue_url, {"status": IssueStatus.INTERRUPTED, "interrupted_phase": IssueStatus.IMPLEMENTING})
+            update_issue_state(issue_url, {
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.IMPLEMENTING,
+            })
             return
 
-        output = result.output
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
-
-        # Check for existing PR first (e.g. from a previous interrupted run)
-        pr_url = find_open_pr(g, owner, repo, branch_name)
-        if not pr_url:
-            # Try to create a new PR
-            try:
-                issue_obj = fetch_issue(g, owner, repo, number)
-                pr_url = create_pull_request(
-                    g, owner, repo,
-                    title=f"Fix #{number}: {issue_obj.title}",
-                    body=f"Closes #{number}{format_cost_line(total_cost)}",
-                    head=branch_name,
-                    base=default_branch,
-                )
-                log.info("Created PR: %s", pr_url)
-            except Exception as e:
-                log.error("Failed to create PR for #%d: %s", number, e)
+        pr_url = _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue)
 
         if pr_url:
-            _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
-                                        cost_eur=total_cost)
-            log.info("Conversation saved to %s", conv_path)
+            _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span, cost_eur=total_cost)
         else:
             log.error("Implementation of #%d produced no PR", number)
-            log.error("Claude output (last 2000 chars): %s", (output or "")[-2000:])
-            max_retries = get_settings().implement_max_retries
-            retry_count = issue_state.get("retry_count", 0) + 1
-            if retry_count >= max_retries:
-                log.error("Issue #%d failed after %d retries — giving up", number, retry_count)
-                post_comment(g, owner, repo, number,
-                             "Implementation failed to produce a PR after multiple retries. "
-                             "Marking as failed — manual intervention needed.")
-                span.set_attribute("implement.status", "failed")
-                update_issue_state(issue_url, {"status": IssueStatus.FAILED, "retry_count": retry_count})
-            else:
-                post_comment(g, owner, repo, number,
-                             f"Implementation ran but no PR was created "
-                             f"(attempt {retry_count}/{max_retries}). "
-                             "I'll retry on the next cycle.")
-                span.set_attribute("implement.status", "no_pr")
-                span.set_attribute("implement.retry_count", retry_count)
-                update_issue_state(issue_url, {"status": IssueStatus.INTERRUPTED, "interrupted_phase": IssueStatus.IMPLEMENTING,
-                                               "retry_count": retry_count})
+            log.error("Claude output (last 2000 chars): %s", (result.output or "")[-2000:])
+            _handle_no_pr(g, owner, repo, number, issue_url, issue_state, span)
+
+
+def _try_resume_from_existing_pr(g, owner, repo, number, issue_url, issue_state, span) -> bool:
+    """If a PR already exists for the WIP branch, finish without re-running Claude.
+
+    Returns True if we found an existing PR and finished; False otherwise.
+    """
+    branch_name = issue_state.get("branch_name", f"clayde/issue-{number}")
+    existing_pr = find_open_pr(g, owner, repo, branch_name)
+    if not existing_pr:
+        return False
+
+    log.info("Resuming interrupted #%d — found existing PR %s", number, existing_pr)
+    accumulated = pop_accumulated_cost(issue_url)
+    _assign_reviewer_and_finish(
+        g, owner, repo, number, issue_url, existing_pr, span,
+        cost_eur=accumulated if accumulated > 0 else None,
+    )
+    return True
+
+
+def _prepare_implementation_context(g, owner, repo, number, issue_url, issue_state, resumed):
+    """Fetch all resources needed to run Claude and return them as a tuple."""
+    plan_comment_id = issue_state["plan_comment_id"]
+    issue = fetch_issue(g, owner, repo, number)
+    default_branch = get_default_branch(g, owner, repo)
+    repo_path = ensure_repo(owner, repo, default_branch)
+
+    plan_comment = fetch_comment(g, owner, repo, number, plan_comment_id)
+    plan_text = plan_comment.body
+
+    branch_name = issue_state.get("branch_name") or extract_branch_name(plan_text, number)
+    update_issue_state(issue_url, {"branch_name": branch_name})
+
+    if resumed:
+        _checkout_wip_branch(repo_path, branch_name)
+
+    all_comments = fetch_issue_comments(g, owner, repo, number)
+    visible_comments = filter_comments(all_comments)
+    discussion_text = collect_comments_after(visible_comments, plan_comment_id)
+
+    prompt = _build_prompt(issue, plan_text, discussion_text, owner, repo, number, repo_path, branch_name)
+
+    conversation_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}.json"
+    conversation_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return issue, default_branch, repo_path, branch_name, prompt, conversation_path
+
+
+def _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue) -> str | None:
+    """Return the PR URL for branch_name, creating it if necessary."""
+    pr_url = find_open_pr(g, owner, repo, branch_name)
+    if pr_url:
+        return pr_url
+
+    try:
+        pr_url = create_pull_request(
+            g, owner, repo,
+            title=f"Fix #{number}: {issue.title}",
+            body=f"Closes #{number}{format_cost_line(total_cost)}",
+            head=branch_name,
+            base=default_branch,
+        )
+        log.info("Created PR: %s", pr_url)
+        return pr_url
+    except Exception as e:
+        log.error("Failed to create PR for #%d: %s", number, e)
+        return None
+
+
+def _handle_no_pr(g, owner, repo, number, issue_url, issue_state, span) -> None:
+    """Handle the case where implementation produced no PR — retry or give up."""
+    max_retries = get_settings().implement_max_retries
+    retry_count = issue_state.get("retry_count", 0) + 1
+    if retry_count >= max_retries:
+        log.error("Issue #%d failed after %d retries — giving up", number, retry_count)
+        post_comment(g, owner, repo, number,
+                     "Implementation failed to produce a PR after multiple retries. "
+                     "Marking as failed — manual intervention needed.")
+        span.set_attribute("implement.status", "failed")
+        update_issue_state(issue_url, {"status": IssueStatus.FAILED, "retry_count": retry_count})
+    else:
+        post_comment(g, owner, repo, number,
+                     f"Implementation ran but no PR was created "
+                     f"(attempt {retry_count}/{max_retries}). "
+                     "I'll retry on the next cycle.")
+        span.set_attribute("implement.status", "no_pr")
+        span.set_attribute("implement.retry_count", retry_count)
+        update_issue_state(issue_url, {
+            "status": IssueStatus.INTERRUPTED,
+            "interrupted_phase": IssueStatus.IMPLEMENTING,
+            "retry_count": retry_count,
+        })
 
 
 def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
@@ -152,7 +182,6 @@ def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
     """Post result, assign reviewer, set status to pr_open."""
     _post_result(g, owner, repo, number, pr_url, cost_eur=cost_eur)
 
-    # Assign the issue author as PR reviewer
     try:
         issue_author = get_issue_author(g, owner, repo, number)
         _, _, pr_number = parse_pr_url(pr_url)
@@ -174,7 +203,6 @@ def _checkout_wip_branch(repo_path, branch_name: str) -> None:
     """Checkout an existing WIP branch if it exists (locally or on remote)."""
     cwd = str(repo_path)
 
-    # Check local branch
     result = subprocess.run(
         ["git", "branch", "--list", branch_name],
         cwd=cwd, capture_output=True, text=True,
@@ -185,7 +213,6 @@ def _checkout_wip_branch(repo_path, branch_name: str) -> None:
         log.info("Resumed WIP branch %s (local)", branch_name)
         return
 
-    # Check remote branch
     result = subprocess.run(
         ["git", "ls-remote", "--heads", "origin", branch_name],
         cwd=cwd, capture_output=True, text=True,
