@@ -6,7 +6,7 @@ import pytest
 from github import GithubException
 
 from clayde.github import (
-    _has_blocking_references,
+    _has_open_parent_issue,
     add_pr_reviewer,
     create_pull_request,
     edit_comment,
@@ -177,134 +177,61 @@ class TestCreatePullRequest:
 
 
 class TestIsBlocked:
-    def test_not_blocked_with_no_references(self):
+    def test_not_blocked_when_no_open_parent(self):
         g = MagicMock()
-        issue = MagicMock()
-        issue.body = "Just a normal issue"
-        g.get_repo.return_value.get_issue.return_value = issue
-        g.auth = MagicMock()
-        g.auth.token = "tok"
-        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=False):
-            assert is_blocked(g, "o", "r", 1) is False
-
-    def test_blocked_by_open_issue_in_body(self):
-        g = MagicMock()
-        issue = MagicMock()
-        issue.body = "This is blocked by #5"
-        ref_issue = MagicMock()
-        ref_issue.state = "open"
-
-        # get_repo called twice: once for the issue, once for the ref
-        repo_mock = MagicMock()
-        repo_mock.get_issue.side_effect = lambda n: issue if n == 1 else ref_issue
-        g.get_repo.return_value = repo_mock
-        g.auth = MagicMock()
-        g.auth.token = "tok"
-
-        assert is_blocked(g, "o", "r", 1) is True
-
-    def test_not_blocked_when_ref_is_closed(self):
-        g = MagicMock()
-        issue = MagicMock()
-        issue.body = "This is blocked by #5"
-        ref_issue = MagicMock()
-        ref_issue.state = "closed"
-
-        repo_mock = MagicMock()
-        repo_mock.get_issue.side_effect = lambda n: issue if n == 1 else ref_issue
-        g.get_repo.return_value = repo_mock
-        g.auth = MagicMock()
-        g.auth.token = "tok"
-        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=False):
-            assert is_blocked(g, "o", "r", 1) is False
-
-    def test_not_blocked_with_no_body(self):
-        g = MagicMock()
-        issue = MagicMock()
-        issue.body = None
-        g.get_repo.return_value.get_issue.return_value = issue
-        g.auth = MagicMock()
-        g.auth.token = "tok"
-        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=False):
-            assert is_blocked(g, "o", "r", 1) is False
-
-    def test_blocked_by_depends_on_pattern(self):
-        g = MagicMock()
-        issue = MagicMock()
-        issue.body = "This depends on #10"
-        ref_issue = MagicMock()
-        ref_issue.state = "open"
-
-        repo_mock = MagicMock()
-        repo_mock.get_issue.side_effect = lambda n: issue if n == 1 else ref_issue
-        g.get_repo.return_value = repo_mock
-        g.auth = MagicMock()
-        g.auth.token = "tok"
-
-        assert is_blocked(g, "o", "r", 1) is True
-
-    def test_blocked_by_sub_issue_parent(self):
-        g = MagicMock()
-        issue = MagicMock()
-        issue.body = "Normal issue"
-        g.get_repo.return_value.get_issue.return_value = issue
         settings = MagicMock()
         settings.github_token = "tok"
-        with patch("clayde.github._has_blocking_sub_issue_parents", return_value=True), \
+        with patch("clayde.github._has_open_parent_issue", return_value=False), \
+             patch("clayde.github.get_settings", return_value=settings):
+            assert is_blocked(g, "o", "r", 1) is False
+
+    def test_blocked_when_open_parent_exists(self):
+        g = MagicMock()
+        settings = MagicMock()
+        settings.github_token = "tok"
+        with patch("clayde.github._has_open_parent_issue", return_value=True), \
              patch("clayde.github.get_settings", return_value=settings):
             assert is_blocked(g, "o", "r", 1) is True
 
-    def test_timeline_failure_does_not_block(self):
+    def test_not_blocked_when_no_token(self):
         g = MagicMock()
-        issue = MagicMock()
-        issue.body = "Normal issue"
-        g.get_repo.return_value.get_issue.return_value = issue
+        settings = MagicMock()
+        settings.github_token = None
+        with patch("clayde.github.get_settings", return_value=settings):
+            assert is_blocked(g, "o", "r", 1) is False
+
+    def test_exception_does_not_block(self):
+        g = MagicMock()
         settings = MagicMock()
         settings.github_token = "tok"
-        with patch("clayde.github._has_blocking_sub_issue_parents", side_effect=Exception("fail")), \
+        with patch("clayde.github._has_open_parent_issue", side_effect=Exception("fail")), \
              patch("clayde.github.get_settings", return_value=settings):
-            # Should not raise, and should not block
             assert is_blocked(g, "o", "r", 1) is False
 
 
-class TestHasBlockingReferences:
-    def test_same_repo_blocked_by(self):
-        g = MagicMock()
-        ref_issue = MagicMock()
-        ref_issue.state = "open"
-        g.get_repo.return_value.get_issue.return_value = ref_issue
-        assert _has_blocking_references(g, "o", "r", "blocked by #5") is True
+class TestHasOpenParentIssue:
+    def test_open_parent_detected(self):
+        events = [
+            {"event": "connected", "source": {"issue": {"state": "open", "html_url": "https://github.com/o/r/issues/5"}}},
+        ]
+        with patch("clayde.github._fetch_timeline_events", return_value=events):
+            assert _has_open_parent_issue("tok", "o", "r", 1) is True
 
-    def test_same_repo_depends_on(self):
-        g = MagicMock()
-        ref_issue = MagicMock()
-        ref_issue.state = "open"
-        g.get_repo.return_value.get_issue.return_value = ref_issue
-        assert _has_blocking_references(g, "o", "r", "depends on #5") is True
+    def test_closed_parent_not_blocking(self):
+        events = [
+            {"event": "connected", "source": {"issue": {"state": "closed", "html_url": "https://github.com/o/r/issues/5"}}},
+        ]
+        with patch("clayde.github._fetch_timeline_events", return_value=events):
+            assert _has_open_parent_issue("tok", "o", "r", 1) is False
 
-    def test_cross_repo_blocked_by(self):
-        g = MagicMock()
-        ref_issue = MagicMock()
-        ref_issue.state = "open"
-        g.get_repo.return_value.get_issue.return_value = ref_issue
-        assert _has_blocking_references(g, "o", "r", "blocked by other/repo#3") is True
-        g.get_repo.assert_called_with("other/repo")
+    def test_no_connected_events(self):
+        events = [{"event": "labeled"}, {"event": "assigned"}]
+        with patch("clayde.github._fetch_timeline_events", return_value=events):
+            assert _has_open_parent_issue("tok", "o", "r", 1) is False
 
-    def test_closed_reference_not_blocking(self):
-        g = MagicMock()
-        ref_issue = MagicMock()
-        ref_issue.state = "closed"
-        g.get_repo.return_value.get_issue.return_value = ref_issue
-        assert _has_blocking_references(g, "o", "r", "blocked by #5") is False
-
-    def test_no_patterns(self):
-        g = MagicMock()
-        assert _has_blocking_references(g, "o", "r", "no blocking text here") is False
-
-    def test_github_exception_ignored(self):
-        g = MagicMock()
-        g.get_repo.return_value.get_issue.side_effect = GithubException(404, "not found", None)
-        assert _has_blocking_references(g, "o", "r", "blocked by #99") is False
+    def test_timeline_failure_returns_false(self):
+        with patch("clayde.github._fetch_timeline_events", side_effect=Exception("network error")):
+            assert _has_open_parent_issue("tok", "o", "r", 1) is False
 
 
 class TestAddPrReviewer:
