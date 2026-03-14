@@ -229,6 +229,31 @@ def _load_conversation(conversation_path: Path) -> list | None:
     return None
 
 
+def _build_usage_limit_error(
+    message: str,
+    *,
+    cause: Exception,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    repo_path: str,
+    branch_name: str | None,
+    conversation_path: "Path | None",
+    messages: list,
+    span,
+) -> UsageLimitError:
+    """Commit WIP, save conversation, and return a UsageLimitError with partial cost."""
+    if branch_name:
+        _commit_wip(repo_path, branch_name)
+    if conversation_path:
+        _save_conversation(conversation_path, messages)
+    partial_cost_eur = _calculate_cost_usd(model, input_tokens, output_tokens) * _EUR_PER_USD
+    exc = UsageLimitError(message, cost_eur=partial_cost_eur)
+    span.set_attribute("claude.usage_limit", True)
+    span.record_exception(exc)
+    return exc
+
+
 def invoke_claude(
     prompt: str,
     repo_path: str,
@@ -348,30 +373,34 @@ def invoke_claude(
 
         except anthropic.RateLimitError as e:
             log.error("Claude API rate limit hit: %s", e)
-            if branch_name:
-                _commit_wip(repo_path, branch_name)
-            if conversation_path:
-                _save_conversation(conversation_path, messages)
-            partial_cost_usd = _calculate_cost_usd(model, total_input_tokens, total_output_tokens)
-            partial_cost_eur = partial_cost_usd * _EUR_PER_USD
-            span.set_attribute("claude.usage_limit", True)
-            exc = UsageLimitError(f"Claude API rate limit: {e}", cost_eur=partial_cost_eur)
-            span.record_exception(exc)
-            raise exc from e
+            raise _build_usage_limit_error(
+                f"Claude API rate limit: {e}",
+                cause=e,
+                model=model,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                repo_path=repo_path,
+                branch_name=branch_name,
+                conversation_path=conversation_path,
+                messages=messages,
+                span=span,
+            ) from e
 
         except anthropic.APIStatusError as e:
             if e.status_code == 529:
                 log.error("Claude API overloaded (529): %s", e)
-                if branch_name:
-                    _commit_wip(repo_path, branch_name)
-                if conversation_path:
-                    _save_conversation(conversation_path, messages)
-                partial_cost_usd = _calculate_cost_usd(model, total_input_tokens, total_output_tokens)
-                partial_cost_eur = partial_cost_usd * _EUR_PER_USD
-                span.set_attribute("claude.usage_limit", True)
-                exc = UsageLimitError(f"Claude API overloaded: {e}", cost_eur=partial_cost_eur)
-                span.record_exception(exc)
-                raise exc from e
+                raise _build_usage_limit_error(
+                    f"Claude API overloaded: {e}",
+                    cause=e,
+                    model=model,
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    repo_path=repo_path,
+                    branch_name=branch_name,
+                    conversation_path=conversation_path,
+                    messages=messages,
+                    span=span,
+                ) from e
             log.error("Claude API error %d: %s", e.status_code, e)
             span.set_attribute("claude.api_error", e.status_code)
             raise
