@@ -67,76 +67,90 @@ def _calculate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> fl
 
 
 def _execute_tool(block, cwd: str) -> str:
-    """Execute a bash or text_editor tool call locally and return output."""
+    """Dispatch a tool call to the appropriate handler and return output."""
     if block.name == "bash":
-        bash_timeout = get_settings().claude_bash_timeout_s
-        cmd = block.input.get("command", "")
-        try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=cwd,
-                text=True,
-                capture_output=True,
-                timeout=bash_timeout,
-            )
-            output = result.stdout or ""
-            if result.stderr:
-                output += "\n[stderr]\n" + result.stderr
-            return output or "(no output)"
-        except subprocess.TimeoutExpired:
-            return f"[error: command timed out after {bash_timeout}s]"
-        except Exception as e:
-            return f"[error: {e}]"
-
+        return _run_bash(block, cwd)
     elif block.name == "str_replace_based_edit_tool":
-        command = block.input.get("command", "view")
-        path = block.input.get("path", "")
-        full_path = Path(cwd) / path if path and not Path(path).is_absolute() else Path(path)
-
-        if command == "view":
-            try:
-                if full_path.is_dir():
-                    entries = sorted(full_path.iterdir())
-                    lines = [str(e.relative_to(full_path)) + ("/" if e.is_dir() else "")
-                             for e in entries]
-                    return "\n".join(lines) or "(empty directory)"
-                else:
-                    return full_path.read_text()
-            except Exception as e:
-                return f"[error: {e}]"
-
-        elif command == "create":
-            file_text = block.input.get("file_text", "")
-            try:
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(file_text)
-                return f"File created: {path}"
-            except Exception as e:
-                return f"[error: {e}]"
-
-        elif command == "str_replace":
-            old_str = block.input.get("old_str", "")
-            new_str = block.input.get("new_str", "")
-            try:
-                content = full_path.read_text()
-                if old_str not in content:
-                    return f"[error: old_str not found in {path}]"
-                new_content = content.replace(old_str, new_str, 1)
-                full_path.write_text(new_content)
-                return f"Replacement done in {path}"
-            except Exception as e:
-                return f"[error: {e}]"
-
-        elif command == "undo_edit":
-            # Not supported in this implementation
-            return "[error: undo_edit not supported]"
-
-        else:
-            return f"[error: unknown text_editor command: {command}]"
-
+        return _run_editor(block, cwd)
     else:
         return f"[error: unknown tool: {block.name}]"
+
+
+def _run_bash(block, cwd: str) -> str:
+    """Execute a bash command and return its combined stdout/stderr output."""
+    bash_timeout = get_settings().claude_bash_timeout_s
+    cmd = block.input.get("command", "")
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            timeout=bash_timeout,
+        )
+        output = result.stdout or ""
+        if result.stderr:
+            output += "\n[stderr]\n" + result.stderr
+        return output or "(no output)"
+    except subprocess.TimeoutExpired:
+        return f"[error: command timed out after {bash_timeout}s]"
+    except Exception as e:
+        return f"[error: {e}]"
+
+
+def _run_editor(block, cwd: str) -> str:
+    """Execute a str_replace_based_edit_tool command and return a status string."""
+    command = block.input.get("command", "view")
+    path = block.input.get("path", "")
+    full_path = Path(cwd) / path if path and not Path(path).is_absolute() else Path(path)
+
+    if command == "view":
+        return _editor_view(full_path)
+    elif command == "create":
+        return _editor_create(full_path, path, block.input.get("file_text", ""))
+    elif command == "str_replace":
+        return _editor_str_replace(
+            full_path, path,
+            block.input.get("old_str", ""),
+            block.input.get("new_str", ""),
+        )
+    elif command == "undo_edit":
+        return "[error: undo_edit not supported]"
+    else:
+        return f"[error: unknown text_editor command: {command}]"
+
+
+def _editor_view(full_path: Path) -> str:
+    try:
+        if full_path.is_dir():
+            entries = sorted(full_path.iterdir())
+            lines = [str(e.relative_to(full_path)) + ("/" if e.is_dir() else "")
+                     for e in entries]
+            return "\n".join(lines) or "(empty directory)"
+        return full_path.read_text()
+    except Exception as e:
+        return f"[error: {e}]"
+
+
+def _editor_create(full_path: Path, display_path: str, file_text: str) -> str:
+    try:
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(file_text)
+        return f"File created: {display_path}"
+    except Exception as e:
+        return f"[error: {e}]"
+
+
+def _editor_str_replace(full_path: Path, display_path: str, old_str: str, new_str: str) -> str:
+    try:
+        content = full_path.read_text()
+        if old_str not in content:
+            return f"[error: old_str not found in {display_path}]"
+        full_path.write_text(content.replace(old_str, new_str, 1))
+        return f"Replacement done in {display_path}"
+    except Exception as e:
+        return f"[error: {e}]"
 
 
 def _commit_wip(repo_path: str, branch_name: str) -> None:
