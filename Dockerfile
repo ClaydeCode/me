@@ -17,6 +17,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Configure git credential helper for gh
 RUN git config --global credential.helper '!gh auth git-credential'
 
+ENV PATH="/opt/clayde/.venv/bin:$PATH"
+
 WORKDIR /opt/clayde
 
 # Install dependencies first (layer caching)
