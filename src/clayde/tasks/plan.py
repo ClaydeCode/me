@@ -288,14 +288,6 @@ def run_update(issue_url: str, phase: str) -> None:
         log.info("Plan update complete for issue #%d", number)
 
 
-# ---------------------------------------------------------------------------
-# Backward compatibility: old `run()` for the `interrupted` retry path
-# ---------------------------------------------------------------------------
-
-def run(issue_url: str) -> None:
-    """Run the preliminary plan phase (backward-compatible entry point)."""
-    run_preliminary(issue_url)
-
 
 # ---------------------------------------------------------------------------
 # Prompt builders
