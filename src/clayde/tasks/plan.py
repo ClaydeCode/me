@@ -7,12 +7,12 @@ Updates: When new visible comments arrive, update the current plan and post a
 """
 
 import logging
-from pathlib import Path
 
-from jinja2 import Environment, StrictUndefined
+from github import Github
+from github.Issue import Issue
 
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
-from clayde.config import get_github_client, get_settings
+from clayde.config import get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
     edit_comment,
@@ -23,13 +23,12 @@ from clayde.github import (
     parse_issue_url,
     post_comment,
 )
-from clayde.safety import filter_comments, is_issue_visible
-from clayde.state import accumulate_cost, pop_accumulated_cost, update_issue_state
+from clayde.prompts import collect_comments_after, render_template
+from clayde.safety import filter_comments, get_new_visible_comments, is_issue_visible
+from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.plan")
-
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 _UPDATE_PLAN_SEPARATOR = "---UPDATED_PLAN---"
 
@@ -48,7 +47,7 @@ def run_preliminary(issue_url: str) -> None:
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
         update_issue_state(issue_url, {
-            "status": "preliminary_planning",
+            "status": IssueStatus.PRELIMINARY_PLANNING,
             "owner": owner, "repo": repo, "number": number,
         })
 
@@ -66,8 +65,8 @@ def run_preliminary(issue_url: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "preliminary_planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING,
             })
             return
 
@@ -78,7 +77,7 @@ def run_preliminary(issue_url: str) -> None:
         if not plan_text.strip():
             log.error("Claude returned empty preliminary plan for issue #%d", number)
             span.set_attribute("plan.status", "empty")
-            update_issue_state(issue_url, {"status": "failed"})
+            update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
 
         if len(plan_text.strip()) < 100:
@@ -86,8 +85,8 @@ def run_preliminary(issue_url: str) -> None:
                         number, len(plan_text.strip()))
             span.set_attribute("plan.status", "short")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "preliminary_planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING,
             })
             return
 
@@ -98,7 +97,7 @@ def run_preliminary(issue_url: str) -> None:
         last_comment_id = all_comments[-1].id if all_comments else 0
 
         update_issue_state(issue_url, {
-            "status": "awaiting_preliminary_approval",
+            "status": IssueStatus.AWAITING_PRELIMINARY_APPROVAL,
             "preliminary_comment_id": comment_id,
             "last_seen_comment_id": last_comment_id,
         })
@@ -119,13 +118,12 @@ def run_thorough(issue_url: str) -> None:
         span.set_attribute("issue.number", number)
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
-        update_issue_state(issue_url, {"status": "planning"})
+        update_issue_state(issue_url, {"status": IssueStatus.PLANNING})
 
         issue = fetch_issue(g, owner, repo, number)
         default_branch = get_default_branch(g, owner, repo)
         repo_path = ensure_repo(owner, repo, default_branch)
 
-        from clayde.state import get_issue_state
         issue_state = get_issue_state(issue_url)
         preliminary_comment_id = issue_state.get("preliminary_comment_id")
         preliminary_comment = fetch_comment(g, owner, repo, number, preliminary_comment_id)
@@ -134,7 +132,7 @@ def run_thorough(issue_url: str) -> None:
         # Collect discussion after the preliminary plan
         all_comments = fetch_issue_comments(g, owner, repo, number)
         visible_comments = filter_comments(all_comments)
-        discussion_text = _collect_discussion_after(visible_comments, preliminary_comment_id)
+        discussion_text = collect_comments_after(visible_comments, preliminary_comment_id)
 
         prompt = _build_thorough_prompt(
             g, issue, owner, repo, number, repo_path,
@@ -149,8 +147,8 @@ def run_thorough(issue_url: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PLANNING,
             })
             return
 
@@ -161,7 +159,7 @@ def run_thorough(issue_url: str) -> None:
         if not plan_text.strip():
             log.error("Claude returned empty thorough plan for issue #%d", number)
             span.set_attribute("plan.status", "empty")
-            update_issue_state(issue_url, {"status": "failed"})
+            update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
 
         if len(plan_text.strip()) < 200:
@@ -169,8 +167,8 @@ def run_thorough(issue_url: str) -> None:
                         number, len(plan_text.strip()))
             span.set_attribute("plan.status", "short")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PLANNING,
             })
             return
 
@@ -181,7 +179,7 @@ def run_thorough(issue_url: str) -> None:
         last_comment_id = all_comments[-1].id if all_comments else 0
 
         update_issue_state(issue_url, {
-            "status": "awaiting_plan_approval",
+            "status": IssueStatus.AWAITING_PLAN_APPROVAL,
             "plan_comment_id": comment_id,
             "last_seen_comment_id": last_comment_id,
         })
@@ -207,15 +205,16 @@ def run_update(issue_url: str, phase: str) -> None:
         span.set_attribute("issue.number", number)
         span.set_attribute("plan.update_phase", phase)
 
-        from clayde.state import get_issue_state
         issue_state = get_issue_state(issue_url)
 
         if phase == "preliminary":
             plan_comment_id = issue_state.get("preliminary_comment_id")
-            return_status = "awaiting_preliminary_approval"
-        else:
+            return_status = IssueStatus.AWAITING_PRELIMINARY_APPROVAL
+        elif phase == "thorough":
             plan_comment_id = issue_state.get("plan_comment_id")
-            return_status = "awaiting_plan_approval"
+            return_status = IssueStatus.AWAITING_PLAN_APPROVAL
+        else:
+            raise ValueError(f"Unknown plan update phase: {phase!r}")
 
         last_seen = issue_state.get("last_seen_comment_id", 0)
 
@@ -227,14 +226,7 @@ def run_update(issue_url: str, phase: str) -> None:
         current_plan_text = plan_comment.body
 
         all_comments = fetch_issue_comments(g, owner, repo, number)
-        visible_comments = filter_comments(all_comments)
-
-        # Get new visible comments since last seen
-        github_username = get_settings().github_username
-        new_comments = [
-            c for c in visible_comments
-            if c.id > last_seen and c.user.login != github_username
-        ]
+        new_comments = get_new_visible_comments(all_comments, last_seen)
 
         if not new_comments:
             log.info("No new visible comments for issue #%d — skipping update", number)
@@ -261,8 +253,8 @@ def run_update(issue_url: str, phase: str) -> None:
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.update_status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": f"{phase}_planning" if phase == "preliminary" else "planning",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING if phase == "preliminary" else IssueStatus.PLANNING,
             })
             return
 
@@ -293,20 +285,12 @@ def run_update(issue_url: str, phase: str) -> None:
         log.info("Plan update complete for issue #%d", number)
 
 
-# ---------------------------------------------------------------------------
-# Backward compatibility: old `run()` for the `interrupted` retry path
-# ---------------------------------------------------------------------------
-
-def run(issue_url: str) -> None:
-    """Run the preliminary plan phase (backward-compatible entry point)."""
-    run_preliminary(issue_url)
-
 
 # ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-def _build_preliminary_prompt(g, issue, owner: str, repo: str, number: int, repo_path: str) -> str:
+def _build_preliminary_prompt(g: Github, issue: Issue, owner: str, repo: str, number: int, repo_path: str) -> str:
     labels = ", ".join(l.name for l in issue.labels) or "none"
     comments = fetch_issue_comments(g, owner, repo, number)
     visible = filter_comments(comments)
@@ -318,8 +302,8 @@ def _build_preliminary_prompt(g, issue, owner: str, repo: str, number: int, repo
     if not is_issue_visible(issue):
         body_text = "(filtered)"
 
-    template_src = (_PROMPTS_DIR / "preliminary_plan.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+    return render_template(
+        "preliminary_plan.j2",
         number=number,
         title=issue.title,
         owner=owner,
@@ -331,16 +315,16 @@ def _build_preliminary_prompt(g, issue, owner: str, repo: str, number: int, repo
     )
 
 
-def _build_thorough_prompt(g, issue, owner, repo, number, repo_path,
-                           preliminary_text, discussion_text) -> str:
+def _build_thorough_prompt(g: Github, issue: Issue, owner: str, repo: str, number: int,
+                           repo_path: str, preliminary_text: str, discussion_text: str) -> str:
     labels = ", ".join(l.name for l in issue.labels) or "none"
 
     body_text = issue.body or "(empty)"
     if not is_issue_visible(issue):
         body_text = "(filtered)"
 
-    template_src = (_PROMPTS_DIR / "thorough_plan.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+    return render_template(
+        "thorough_plan.j2",
         number=number,
         title=issue.title,
         owner=owner,
@@ -353,10 +337,10 @@ def _build_thorough_prompt(g, issue, owner, repo, number, repo_path,
     )
 
 
-def _build_update_prompt(number, title, owner, repo, body, current_plan_text,
-                         new_comments_text, repo_path) -> str:
-    template_src = (_PROMPTS_DIR / "update_plan.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+def _build_update_prompt(number: int, title: str, owner: str, repo: str, body: str,
+                         current_plan_text: str, new_comments_text: str, repo_path: str) -> str:
+    return render_template(
+        "update_plan.j2",
         number=number,
         title=title,
         owner=owner,
@@ -400,19 +384,6 @@ def _post_thorough_plan_comment(g, owner: str, repo: str, number: int, plan_text
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _collect_discussion_after(comments: list, after_comment_id: int) -> str:
-    """Collect visible comment text posted after a specific comment ID."""
-    found = False
-    discussion = []
-    for c in comments:
-        if c.id == after_comment_id:
-            found = True
-            continue
-        if found:
-            discussion.append(f"@{c.user.login}:\n{c.body}")
-    return "\n---\n".join(discussion) or "(none)"
-
 
 def _parse_update_output(output: str) -> tuple[str, str]:
     """Parse Claude output into (summary, updated_plan).

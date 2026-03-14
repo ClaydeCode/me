@@ -2,6 +2,7 @@
 
 import json
 import logging
+from enum import StrEnum
 
 from opentelemetry import trace
 
@@ -12,21 +13,34 @@ log = logging.getLogger("clayde.state")
 _STATE_FILE = DATA_DIR / "state.json"
 
 
-def load_state():
+class IssueStatus(StrEnum):
+    PRELIMINARY_PLANNING = "preliminary_planning"
+    AWAITING_PRELIMINARY_APPROVAL = "awaiting_preliminary_approval"
+    PLANNING = "planning"
+    AWAITING_PLAN_APPROVAL = "awaiting_plan_approval"
+    IMPLEMENTING = "implementing"
+    PR_OPEN = "pr_open"
+    ADDRESSING_REVIEW = "addressing_review"
+    DONE = "done"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+def load_state() -> dict:
     if _STATE_FILE.exists():
         return json.loads(_STATE_FILE.read_text())
     return {"issues": {}}
 
 
-def save_state(state):
+def save_state(state: dict) -> None:
     _STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def get_issue_state(issue_url):
+def get_issue_state(issue_url: str) -> dict:
     return load_state()["issues"].get(issue_url, {})
 
 
-def update_issue_state(issue_url, updates):
+def update_issue_state(issue_url: str, updates: dict) -> None:
     state = load_state()
     entry = state["issues"].setdefault(issue_url, {})
     old_status = entry.get("status")

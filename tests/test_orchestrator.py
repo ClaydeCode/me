@@ -5,8 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from clayde.orchestrator import (
-    _handle_awaiting_plan,
-    _handle_awaiting_preliminary,
+    _handle_awaiting_approval,
     _handle_interrupted,
     _handle_new_issue,
     _handle_pr_open,
@@ -25,7 +24,8 @@ def _mock_settings(enabled=False, github_token="tok", github_username="ClaydeCod
 
 class TestMain:
     def test_exits_when_disabled(self):
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=False)):
+        with patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=False)):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
@@ -93,7 +93,7 @@ class TestMain:
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
              patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._handle_awaiting_preliminary") as mock_handle:
+             patch("clayde.orchestrator._handle_awaiting_approval") as mock_handle:
             main()
             mock_handle.assert_called_once()
 
@@ -112,7 +112,7 @@ class TestMain:
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
              patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._handle_awaiting_plan") as mock_handle:
+             patch("clayde.orchestrator._handle_awaiting_approval") as mock_handle:
             main()
             mock_handle.assert_called_once()
 
@@ -151,7 +151,7 @@ class TestMain:
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
              patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._handle_awaiting_plan") as mock_handle:
+             patch("clayde.orchestrator._handle_awaiting_approval") as mock_handle:
             main()
             mock_handle.assert_called_once()
 
@@ -226,7 +226,7 @@ class TestHandleAwaitingPreliminary:
         with patch("clayde.orchestrator._has_new_comments", return_value=False), \
              patch("clayde.orchestrator.is_plan_approved", return_value=False), \
              patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_preliminary(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
             mock_plan.run_thorough.assert_not_called()
             mock_plan.run_update.assert_not_called()
 
@@ -236,7 +236,7 @@ class TestHandleAwaitingPreliminary:
         with patch("clayde.orchestrator._has_new_comments", return_value=False), \
              patch("clayde.orchestrator.is_plan_approved", return_value=True), \
              patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_preliminary(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
             mock_plan.run_thorough.assert_called_once_with("url")
 
     def test_runs_update_when_new_comments(self):
@@ -244,7 +244,7 @@ class TestHandleAwaitingPreliminary:
         entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}
         with patch("clayde.orchestrator._has_new_comments", return_value=True), \
              patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_preliminary(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
             mock_plan.run_update.assert_called_once_with("url", "preliminary")
 
     def test_sets_failed_on_thorough_exception(self):
@@ -255,14 +255,14 @@ class TestHandleAwaitingPreliminary:
              patch("clayde.orchestrator.plan") as mock_plan, \
              patch("clayde.orchestrator.update_issue_state") as mock_update:
             mock_plan.run_thorough.side_effect = RuntimeError("boom")
-            _handle_awaiting_preliminary(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
             mock_update.assert_called_once_with("url", {"status": "failed"})
 
     def test_marks_failed_if_no_preliminary_comment_id(self):
         g = MagicMock()
         entry = {"owner": "o", "repo": "r", "number": 1}
         with patch("clayde.orchestrator.update_issue_state") as mock_update:
-            _handle_awaiting_preliminary(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
             mock_update.assert_called_once_with("url", {"status": "failed"})
 
 
@@ -273,7 +273,7 @@ class TestHandleAwaitingPlan:
         with patch("clayde.orchestrator._has_new_comments", return_value=False), \
              patch("clayde.orchestrator.is_plan_approved", return_value=False), \
              patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_awaiting_plan(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="thorough")
             mock_impl.run.assert_not_called()
 
     def test_runs_implement_when_approved(self):
@@ -282,7 +282,7 @@ class TestHandleAwaitingPlan:
         with patch("clayde.orchestrator._has_new_comments", return_value=False), \
              patch("clayde.orchestrator.is_plan_approved", return_value=True), \
              patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_awaiting_plan(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="thorough")
             mock_impl.run.assert_called_once_with("url")
 
     def test_runs_update_when_new_comments(self):
@@ -290,7 +290,7 @@ class TestHandleAwaitingPlan:
         entry = {"owner": "o", "repo": "r", "number": 1, "plan_comment_id": 200}
         with patch("clayde.orchestrator._has_new_comments", return_value=True), \
              patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_plan(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="thorough")
             mock_plan.run_update.assert_called_once_with("url", "thorough")
 
     def test_sets_failed_on_exception(self):
@@ -301,14 +301,14 @@ class TestHandleAwaitingPlan:
              patch("clayde.orchestrator.implement") as mock_impl, \
              patch("clayde.orchestrator.update_issue_state") as mock_update:
             mock_impl.run.side_effect = RuntimeError("boom")
-            _handle_awaiting_plan(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="thorough")
             mock_update.assert_called_once_with("url", {"status": "failed"})
 
     def test_marks_failed_if_no_plan_comment_id(self):
         g = MagicMock()
         entry = {"owner": "o", "repo": "r", "number": 1}
         with patch("clayde.orchestrator.update_issue_state") as mock_update:
-            _handle_awaiting_plan(g, "url", entry)
+            _handle_awaiting_approval(g, "url", entry, phase="thorough")
             mock_update.assert_called_once_with("url", {"status": "failed"})
 
 
@@ -377,43 +377,15 @@ class TestHasNewComments:
     def test_detects_new_visible_comments(self):
         g = MagicMock()
         comment = MagicMock()
-        comment.id = 200
-        comment.user.login = "alice"
         with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[comment]):
             entry = {"last_seen_comment_id": 100}
             assert _has_new_comments(g, "o", "r", 1, entry) is True
-
-    def test_ignores_clayde_comments(self):
-        g = MagicMock()
-        comment = MagicMock()
-        comment.id = 200
-        comment.user.login = "ClaydeCode"
-        with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
-            entry = {"last_seen_comment_id": 100}
-            assert _has_new_comments(g, "o", "r", 1, entry) is False
 
     def test_no_new_comments(self):
         g = MagicMock()
         comment = MagicMock()
-        comment.id = 50
-        comment.user.login = "alice"
         with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
-            entry = {"last_seen_comment_id": 100}
-            assert _has_new_comments(g, "o", "r", 1, entry) is False
-
-    def test_invisible_comments_ignored(self):
-        g = MagicMock()
-        comment = MagicMock()
-        comment.id = 200
-        comment.user.login = "bob"
-        with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.filter_comments", return_value=[]), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings()):
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]):
             entry = {"last_seen_comment_id": 100}
             assert _has_new_comments(g, "o", "r", 1, entry) is False

@@ -40,6 +40,20 @@ def is_issue_visible(issue) -> bool:
     return _has_whitelisted_reaction(issue.get_reactions())
 
 
+def get_new_visible_comments(comments: list, last_seen_id: int) -> list:
+    """Return visible comments newer than last_seen_id, excluding Clayde's own.
+
+    Used by both the orchestrator (to detect when a plan update is needed)
+    and the plan update task (to collect the new comments for the prompt).
+    """
+    github_username = get_settings().github_username
+    visible = filter_comments(comments)
+    return [
+        c for c in visible
+        if c.id > last_seen_id and c.user.login != github_username
+    ]
+
+
 def has_visible_content(issue, comments: list) -> bool:
     """Return True if there is any visible content (issue body or comments).
 

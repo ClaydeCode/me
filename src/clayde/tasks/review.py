@@ -1,13 +1,11 @@
 """Review task — address PR review comments and push updates."""
 
 import logging
-from pathlib import Path
-
-from jinja2 import Environment, StrictUndefined
 
 from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client, get_settings
 from clayde.git import ensure_repo
+from clayde.prompts import render_template
 from clayde.github import (
     fetch_issue,
     get_default_branch,
@@ -17,12 +15,10 @@ from clayde.github import (
     parse_pr_url,
     post_comment,
 )
-from clayde.state import accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
+from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.review")
-
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 def run(issue_url: str) -> None:
@@ -80,7 +76,7 @@ def run(issue_url: str) -> None:
             approved = any(r.state == "APPROVED" for r in new_reviews)
             if approved:
                 log.info("PR #%d approved for issue #%d — marking as done", pr_number, number)
-                update_issue_state(issue_url, {"status": "done"})
+                update_issue_state(issue_url, {"status": IssueStatus.DONE})
                 span.set_attribute("review.status", "approved")
             return
 
@@ -90,7 +86,7 @@ def run(issue_url: str) -> None:
         log.info("Addressing %d new review(s) on PR #%d for issue #%d",
                  len(new_reviews), pr_number, number)
 
-        update_issue_state(issue_url, {"status": "addressing_review"})
+        update_issue_state(issue_url, {"status": IssueStatus.ADDRESSING_REVIEW})
 
         issue = fetch_issue(g, owner, repo, number)
         default_branch = get_default_branch(g, owner, repo)
@@ -101,23 +97,22 @@ def run(issue_url: str) -> None:
             issue, owner, repo, number, repo_path, branch_name, review_text,
         )
 
-        conv_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}-review.json"
-        conv_path.parent.mkdir(parents=True, exist_ok=True)
+        conversation_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}-review.json"
 
         try:
             result = invoke_claude(
                 prompt,
                 repo_path,
                 branch_name=branch_name,
-                conversation_path=conv_path,
+                conversation_path=conversation_path,
             )
         except UsageLimitError as e:
             log.warning("Usage limit hit during review handling #%d", number)
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("review.status", "limit")
             update_issue_state(issue_url, {
-                "status": "interrupted",
-                "interrupted_phase": "addressing_review",
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.ADDRESSING_REVIEW,
             })
             return
 
@@ -132,7 +127,7 @@ def run(issue_url: str) -> None:
         # Update last seen review ID and return to pr_open
         max_review_id = max(r.id for r in new_reviews)
         update_issue_state(issue_url, {
-            "status": "pr_open",
+            "status": IssueStatus.PR_OPEN,
             "last_seen_review_id": max_review_id,
         })
         span.set_attribute("review.status", "addressed")
@@ -145,23 +140,24 @@ def _format_reviews(reviews: list, review_comments: list) -> str:
 
     for review in reviews:
         header = f"Review by @{review.user.login} (state: {review.state}):"
-        if review.body and review.body.strip():
-            parts.append(f"{header}\n{review.body}")
+        inline_comments = [rc for rc in review_comments if rc.pull_request_review_id == review.id]
 
-        # Add inline comments from this review
-        for rc in review_comments:
-            if rc.pull_request_review_id == review.id:
-                file_info = f"  File: {rc.path}"
-                if hasattr(rc, "line") and rc.line:
-                    file_info += f", line {rc.line}"
-                parts.append(f"{file_info}\n  {rc.body}")
+        has_body = review.body and review.body.strip()
+        if has_body or inline_comments:
+            parts.append(f"{header}\n{review.body}" if has_body else header)
+
+        for rc in inline_comments:
+            file_info = f"  File: {rc.path}"
+            if hasattr(rc, "line") and rc.line:
+                file_info += f", line {rc.line}"
+            parts.append(f"{file_info}\n  {rc.body}")
 
     return "\n---\n".join(parts) or "(no review content)"
 
 
 def _build_prompt(issue, owner, repo, number, repo_path, branch_name, review_text) -> str:
-    template_src = (_PROMPTS_DIR / "address_review.j2").read_text()
-    return Environment(undefined=StrictUndefined).from_string(template_src).render(
+    return render_template(
+        "address_review.j2",
         number=number,
         title=issue.title,
         owner=owner,
