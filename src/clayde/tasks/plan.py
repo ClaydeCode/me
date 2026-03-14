@@ -211,10 +211,12 @@ def run_update(issue_url: str, phase: str) -> None:
 
         if phase == "preliminary":
             plan_comment_id = issue_state.get("preliminary_comment_id")
-            return_status = "awaiting_preliminary_approval"
-        else:
+            return_status = IssueStatus.AWAITING_PRELIMINARY_APPROVAL
+        elif phase == "thorough":
             plan_comment_id = issue_state.get("plan_comment_id")
-            return_status = "awaiting_plan_approval"
+            return_status = IssueStatus.AWAITING_PLAN_APPROVAL
+        else:
+            raise ValueError(f"Unknown plan update phase: {phase!r}")
 
         last_seen = issue_state.get("last_seen_comment_id", 0)
 
