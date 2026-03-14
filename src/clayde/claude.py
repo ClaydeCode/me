@@ -163,18 +163,12 @@ def _serialize_messages(messages: list) -> list:
     """
     serialized = []
     for msg in messages:
-        if msg["role"] == "assistant":
-            content = msg["content"]
-            if isinstance(content, list):
-                dumped = []
-                for block in content:
-                    if hasattr(block, "model_dump"):
-                        dumped.append(block.model_dump())
-                    else:
-                        dumped.append(block)
-                serialized.append({"role": "assistant", "content": dumped})
-            else:
-                serialized.append(msg)
+        if msg["role"] == "assistant" and isinstance(msg["content"], list):
+            dumped = [
+                block.model_dump() if hasattr(block, "model_dump") else block
+                for block in msg["content"]
+            ]
+            serialized.append({"role": "assistant", "content": dumped})
         else:
             serialized.append(msg)
     return serialized
