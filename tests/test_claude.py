@@ -11,7 +11,6 @@ from clayde.claude import (
     InvocationResult,
     UsageLimitError,
     _calculate_cost_usd,
-    _commit_wip,
     _execute_tool,
     _load_conversation,
     _save_conversation,
@@ -20,6 +19,7 @@ from clayde.claude import (
     invoke_claude,
     is_claude_available,
 )
+from clayde.git import commit_wip
 
 
 def _mock_settings(model="claude-sonnet-4-6", api_key="test-key"):
@@ -424,8 +424,8 @@ class TestCommitWip:
             result.returncode = 0
             return result
 
-        with patch("clayde.claude.subprocess.run", side_effect=fake_run):
-            _commit_wip("/repo", "clayde/issue-1")
+        with patch("clayde.git.subprocess.run", side_effect=fake_run):
+            commit_wip("/repo", "clayde/issue-1")
 
         cmd_strs = [" ".join(c) for c in calls]
         assert any("checkout -b clayde/issue-1" in s for s in cmd_strs)
@@ -442,16 +442,16 @@ class TestCommitWip:
             result.returncode = 0  # git diff --cached --quiet returns 0 (no changes)
             return result
 
-        with patch("clayde.claude.subprocess.run", side_effect=fake_run):
-            _commit_wip("/repo", "clayde/issue-1")
+        with patch("clayde.git.subprocess.run", side_effect=fake_run):
+            commit_wip("/repo", "clayde/issue-1")
 
         cmd_strs = [" ".join(c) for c in calls]
         assert not any("commit" in s for s in cmd_strs)
 
     def test_never_raises(self):
-        with patch("clayde.claude.subprocess.run", side_effect=OSError("fail")):
+        with patch("clayde.git.subprocess.run", side_effect=OSError("fail")):
             # Should not raise
-            _commit_wip("/repo", "branch")
+            commit_wip("/repo", "branch")
 
 
 class TestConversationPersistence:
@@ -506,7 +506,7 @@ class TestConversationPersistence:
         with patch("clayde.claude.APP_DIR", tmp_path), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client), \
-             patch("clayde.claude._commit_wip") as mock_wip:
+             patch("clayde.claude.commit_wip") as mock_wip:
             with pytest.raises(UsageLimitError):
                 invoke_claude("prompt", "/repo", branch_name="branch", conversation_path=conv_path)
 
@@ -530,7 +530,7 @@ class TestConversationPersistence:
         with patch("clayde.claude.APP_DIR", tmp_path), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()), \
              patch("clayde.claude._get_client", return_value=mock_client), \
-             patch("clayde.claude._commit_wip"):
+             patch("clayde.claude.commit_wip"):
             with pytest.raises(UsageLimitError):
                 invoke_claude("prompt", "/repo", branch_name="b", conversation_path=conv_path)
 
