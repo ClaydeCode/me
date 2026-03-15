@@ -381,6 +381,21 @@ def invoke_claude(
                 token_counter=token_counter,
             )
 
+        except anthropic.APIConnectionError as e:
+            log.error("Claude API connection error: %s", e)
+            raise _build_usage_limit_error(
+                f"Claude API connection error: {e}",
+                cause=e,
+                model=model,
+                input_tokens=token_counter["input"],
+                output_tokens=token_counter["output"],
+                repo_path=repo_path,
+                branch_name=branch_name,
+                conversation_path=conversation_path,
+                messages=messages,
+                span=span,
+            ) from e
+
         except anthropic.RateLimitError as e:
             log.error("Claude API rate limit hit: %s", e)
             raise _build_usage_limit_error(
