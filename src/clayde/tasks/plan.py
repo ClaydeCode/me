@@ -243,6 +243,7 @@ def run_update(issue_url: str, phase: str) -> None:
         prompt = _build_update_prompt(
             number, issue.title, owner, repo,
             body_text, current_plan_text, new_comments_text, repo_path,
+            phase=phase,
         )
 
         log.info("Invoking Claude for plan update on issue #%d (%s phase)", number, phase)
@@ -338,7 +339,8 @@ def _build_thorough_prompt(g: Github, issue: Issue, owner: str, repo: str, numbe
 
 
 def _build_update_prompt(number: int, title: str, owner: str, repo: str, body: str,
-                         current_plan_text: str, new_comments_text: str, repo_path: str) -> str:
+                         current_plan_text: str, new_comments_text: str, repo_path: str,
+                         phase: str) -> str:
     return render_template(
         "update_plan.j2",
         number=number,
@@ -349,6 +351,7 @@ def _build_update_prompt(number: int, title: str, owner: str, repo: str, body: s
         current_plan_text=current_plan_text,
         new_comments_text=new_comments_text,
         repo_path=repo_path,
+        phase=phase,
     )
 
 

@@ -123,10 +123,28 @@ class TestBuildUpdatePrompt:
         prompt = _build_update_prompt(
             1, "Title", "o", "r", "body",
             "current plan text", "new comment text", "/path",
+            phase="preliminary",
         )
         assert "current plan text" in prompt
         assert "new comment text" in prompt
         assert "UPDATED_PLAN" in prompt
+
+    def test_preliminary_phase_warns_against_escalation(self):
+        prompt = _build_update_prompt(
+            1, "Title", "o", "r", "body",
+            "current plan text", "new comment text", "/path",
+            phase="preliminary",
+        )
+        assert "PRELIMINARY" in prompt
+        assert "Do NOT escalate" in prompt
+
+    def test_thorough_phase_maintains_detail(self):
+        prompt = _build_update_prompt(
+            1, "Title", "o", "r", "body",
+            "current plan text", "new comment text", "/path",
+            phase="thorough",
+        )
+        assert "thorough implementation plan" in prompt
 
 
 class TestPostPreliminaryComment:
