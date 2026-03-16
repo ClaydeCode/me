@@ -66,7 +66,12 @@ class UsageLimitError(Exception):
 
 
 def format_cost_line(cost_eur: float) -> str:
-    """Format a cost line for inclusion in GitHub comments."""
+    """Format a cost line for inclusion in GitHub comments.
+
+    Returns an empty string when cost is zero (e.g. CLI backend).
+    """
+    if cost_eur == 0.0:
+        return ""
     return f"\n\n💸 This task cost {cost_eur:.2f}€"
 
 

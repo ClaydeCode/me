@@ -102,8 +102,8 @@ class TestUsageLimitErrorCost:
 
 
 class TestFormatCostLine:
-    def test_zero_cost(self):
-        assert format_cost_line(0.0) == "\n\n💸 This task cost 0.00€"
+    def test_zero_cost_returns_empty(self):
+        assert format_cost_line(0.0) == ""
 
     def test_small_cost(self):
         assert format_cost_line(0.01) == "\n\n💸 This task cost 0.01€"

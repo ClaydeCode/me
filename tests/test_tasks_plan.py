@@ -143,7 +143,7 @@ class TestPostPreliminaryComment:
         assert "My preliminary plan" in posted_body
         assert "\U0001f44d" in posted_body
         assert "preliminary" in posted_body.lower()
-        assert "💸 This task cost 0.00€" in posted_body
+        assert "💸" not in posted_body  # no cost line when cost is 0
 
     def test_posts_with_cost(self):
         g = MagicMock()
@@ -169,7 +169,7 @@ class TestPostThoroughPlanComment:
         assert "## Implementation Plan" in posted_body
         assert "My thorough plan" in posted_body
         assert "\U0001f44d" in posted_body
-        assert "💸 This task cost 0.00€" in posted_body
+        assert "💸" not in posted_body  # no cost line when cost is 0
 
     def test_posts_with_cost(self):
         g = MagicMock()
