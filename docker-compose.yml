@@ -6,3 +6,5 @@ services:
       - CLAYDE_ENABLED=true
     volumes:
       - ./data:/data
+      # Mount Claude CLI OAuth credentials (required when CLAYDE_CLAUDE_BACKEND=cli)
+      - ./data/claude-credentials.json:/root/.claude/.credentials.json

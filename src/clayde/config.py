@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     whitelisted_users: str = "max-tet,ClaydeCode"
     claude_api_key: str = ""
     claude_model: str = "claude-opus-4-6"
+    claude_backend: str = "api"  # "api" or "cli"
 
     # Claude invocation tuning
     claude_tool_loop_timeout_s: int = 1800
