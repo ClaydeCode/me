@@ -21,8 +21,8 @@ RUN npm install -g @anthropic-ai/claude-code
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Configure git credential helper for gh
-RUN git config --global credential.helper '!gh auth git-credential'
+# Create non-root user (Claude Code CLI refuses --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash clayde
 
 ENV PATH="/opt/clayde/.venv/bin:$PATH"
 
@@ -37,7 +37,13 @@ COPY src/ src/
 COPY CLAUDE.md ./
 RUN uv sync --frozen --no-dev
 
-# Create data directories
-RUN mkdir -p /data/repos /data/logs
+# Create data directories and set ownership
+RUN mkdir -p /data/repos /data/logs && chown -R clayde:clayde /data
+
+# Switch to non-root user and configure git
+USER clayde
+RUN git config --global credential.helper '!gh auth git-credential' && \
+    git config --global user.name "Clayde" && \
+    git config --global user.email "clayde@vtettenborn.net"
 
 ENTRYPOINT ["/opt/clayde/.venv/bin/clayde"]

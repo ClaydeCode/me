@@ -2,9 +2,10 @@ services:
   clayde:
     image: ghcr.io/claydecode/me:main
     restart: unless-stopped
+    user: "1000:1000"
     environment:
       - CLAYDE_ENABLED=true
     volumes:
       - ./data:/data
       # Mount Claude CLI OAuth credentials (required when CLAYDE_CLAUDE_BACKEND=cli)
-      - ~/.claude/.credentials.json:/root/.claude/.credentials.json
+      - ~/.claude/.credentials.json:/home/clayde/.claude/.credentials.json
