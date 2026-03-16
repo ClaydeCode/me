@@ -25,7 +25,7 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 - **Entry points:** `clayde` → `orchestrator:run_loop` (container mode, continuous loop), `clayde-once` → `orchestrator:main` (single cycle)
 - **Deployment:** Docker container via `docker-compose.yml`; loop interval configurable via `CLAYDE_INTERVAL` env var (default 300s)
 - **Container layout:** Application code at `/opt/clayde`, data at `/data` (single volume mount from host `./data`)
-- **Claude:** Anthropic Python SDK (`anthropic` package) with API key — no CLI dependency
+- **Claude:** Dual backend — Anthropic Python SDK (`api`) or Claude Code CLI (`cli`), selected by `CLAYDE_CLAUDE_BACKEND`
 - **Git credential helper:** `gh auth git-credential` (configured globally in the container)
 - **Git identity:** `user.name = Clayde`, `user.email = clayde@vtettenborn.net`
 
@@ -59,8 +59,9 @@ src/clayde/
   safety.py             # Content filtering & plan approval: is_comment_visible(),
                         #   filter_comments(), is_issue_visible(),
                         #   has_visible_content(), is_plan_approved()
-  claude.py             # invoke_claude(prompt, repo_path) — Anthropic SDK with
-                        #   tool-use loop (bash + text_editor)
+  claude.py             # invoke_claude(prompt, repo_path) — dual backend:
+                        #   ApiBackend (Anthropic SDK tool-use loop) or
+                        #   CliBackend (Claude Code CLI subprocess)
   telemetry.py          # OpenTelemetry tracing: init_tracer(), get_tracer(),
                         #   FileSpanExporter (JSONL)
   orchestrator.py       # main() — single cycle, run_loop() — container entry point
@@ -101,8 +102,9 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 | `CLAYDE_GITHUB_USERNAME` | `ClaydeCode` |
 | `CLAYDE_ENABLED` | Set to `true` to activate; any other value causes immediate exit |
 | `CLAYDE_WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames (e.g. `max-tet,ClaydeCode`) |
-| `CLAYDE_CLAUDE_API_KEY` | Anthropic API key for Claude SDK calls |
+| `CLAYDE_CLAUDE_API_KEY` | Anthropic API key for Claude SDK calls (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
+| `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` — selects Anthropic SDK or Claude Code CLI |
 
 Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at startup for the `gh` CLI.
 
@@ -174,7 +176,10 @@ Whitelisted users: configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env
 invoke_claude(prompt, repo_path)
 ```
 
-- Uses the Anthropic Python SDK (`anthropic` package) directly — no CLI dependency
+Two backends, selected by `CLAYDE_CLAUDE_BACKEND`:
+
+### API backend (`api`, default)
+- Uses the Anthropic Python SDK (`anthropic` package) directly
 - Tool-use mode with `bash` and `text_editor` tools (computer-use beta)
 - System prompt: CLAUDE.md contents
 - Model: configurable via `CLAYDE_CLAUDE_MODEL` (default: `claude-opus-4-6`)
@@ -182,6 +187,17 @@ invoke_claude(prompt, repo_path)
 - Timeout: 1800 seconds (30 min) for the full tool loop
 - Rate/usage limit detection: raises `UsageLimitError` on 429 or 529 status codes
 - Token usage and cost tracking via OpenTelemetry spans
+- Conversation persistence: full message list saved to JSON for resumption
+- Requires: `CLAYDE_CLAUDE_API_KEY`
+
+### CLI backend (`cli`)
+- Runs the Claude Code CLI (`claude`) as a subprocess with `--output-format json`
+- Claude manages its own tool loop internally
+- System prompt: CLAUDE.md contents passed via `--append-system-prompt`
+- Session resumption: saves `session_id` from JSON output, resumes via `--resume <session_id>`
+- Rate/usage limit detection: text-pattern matching on stdout/stderr
+- No per-token cost tracking (returns `cost_eur=0.0`)
+- Requires: OAuth credentials mounted from host `~/.claude/.credentials.json` (see docker-compose.yml)
 
 ---
 
