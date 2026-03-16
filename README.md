@@ -65,7 +65,7 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 - **Rate-limit resilience**: Detects Claude usage limits and automatically retries
 - **Safety gates**: Whitelist + approval checks prevent unauthorized work
 - **Observability**: OpenTelemetry tracing with JSONL file export and optional OTLP export
-- **Tool-use loop**: Claude can execute bash commands and edit files in the target repo via the Anthropic SDK
+- **Dual Claude backend**: Use the Anthropic API (pay-per-token) or the Claude Code CLI (subscription-based)
 
 ---
 
@@ -75,13 +75,65 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 |---|---|
 | Language | Python 3.13 |
 | Package manager | `uv` |
-| LLM | Claude (via Anthropic Python SDK) |
+| LLM | Claude (Anthropic SDK or Claude Code CLI) |
 | GitHub API | PyGitHub |
 | Deployment | Docker (continuous loop) |
 | Configuration | pydantic-settings |
 | Templating | Jinja2 |
 | Observability | OpenTelemetry |
 | State persistence | `state.json` |
+
+---
+
+## Setup
+
+### 1. Create the data directory
+
+```bash
+mkdir -p data/logs data/repos
+cp config.env.template data/config.env
+```
+
+Edit `data/config.env` and fill in the required values (see Configuration below).
+
+### 2. Choose a Claude backend
+
+Clayde supports two backends for invoking Claude, selected by `CLAYDE_CLAUDE_BACKEND` in `data/config.env`:
+
+#### Option A: Anthropic API (`api`, default)
+
+Uses the Anthropic Python SDK with a tool-use loop. Pay-per-token.
+
+1. Get an API key from [console.anthropic.com](https://console.anthropic.com/)
+2. Set in `data/config.env`:
+   ```
+   CLAYDE_CLAUDE_BACKEND=api
+   CLAYDE_CLAUDE_API_KEY=sk-ant-...
+   ```
+
+#### Option B: Claude Code CLI (`cli`)
+
+Runs the Claude Code CLI as a subprocess. Uses your Claude Pro/Max subscription — no per-token cost.
+
+1. On the host machine, log in to the CLI:
+   ```bash
+   claude login
+   ```
+2. Set in `data/config.env`:
+   ```
+   CLAYDE_CLAUDE_BACKEND=cli
+   ```
+   (`CLAYDE_CLAUDE_API_KEY` is not required for the CLI backend.)
+
+The `docker-compose.yml` mounts `~/.claude/.credentials.json` from the host directly into the container. Token refreshes, logouts, and account switches on the host are immediately reflected.
+
+### 3. Start the container
+
+```bash
+docker compose up -d
+```
+
+Clayde will start its loop, checking for assigned issues every 5 minutes (configurable via `CLAYDE_LOOP_INTERVAL_S`).
 
 ---
 
@@ -95,5 +147,6 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 | `CLAYDE_GITHUB_USERNAME` | `ClaydeCode` |
 | `CLAYDE_ENABLED` | Set to `true` to activate |
 | `CLAYDE_WHITELISTED_USERS` | Comma-separated trusted GitHub usernames |
-| `CLAYDE_CLAUDE_API_KEY` | Anthropic API key |
+| `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` |
+| `CLAYDE_CLAUDE_API_KEY` | Anthropic API key (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
