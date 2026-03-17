@@ -42,7 +42,8 @@ RUN mkdir -p /data/repos /data/logs && chown -R clayde:clayde /data
 
 # Switch to non-root user and configure git
 USER clayde
-RUN git config --global credential.helper '!gh auth git-credential' && \
+RUN mkdir -p /home/clayde/.claude && \
+    git config --global credential.helper '!gh auth git-credential' && \
     git config --global user.name "Clayde" && \
     git config --global user.email "clayde@vtettenborn.net"
 
