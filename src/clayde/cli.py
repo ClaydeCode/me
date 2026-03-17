@@ -14,7 +14,15 @@ def cmd_status(args: argparse.Namespace) -> None:
         return
     for url, entry in issues.items():
         status = entry.get("status", "(unknown)")
-        print(f"{status:35} {url}")
+        number = entry.get("number", "?")
+        owner = entry.get("owner", "")
+        repo = entry.get("repo", "")
+        repo_ref = f"{owner}/{repo}" if owner and repo else url
+        title = entry.get("pr_title") or entry.get("issue_title") or "(title unknown)"
+        pr_url = entry.get("pr_url")
+        print(f"{status:<28} #{number}  {title}  ({repo_ref})")
+        if pr_url:
+            print(f"{'':28} └─ PR: {pr_url}")
 
 
 def cmd_clear(args: argparse.Namespace) -> None:

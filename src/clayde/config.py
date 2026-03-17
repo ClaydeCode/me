@@ -77,10 +77,7 @@ def setup_logging() -> None:
     log_file = DATA_DIR / "logs" / "agent.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(log_file)
-    handler.setFormatter(logging.Formatter(
-        "[%(asctime)s] [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
+    handler.setFormatter(logging.Formatter("%(message)s"))
     root = logging.getLogger("clayde")
     root.setLevel(logging.INFO)
     root.addHandler(handler)

@@ -247,10 +247,13 @@ class TestRunPreliminary:
         mock_comment = MagicMock()
         mock_comment.id = 500
 
+        mock_issue = MagicMock()
+        mock_issue.title = "Test issue"
+
         with patch("clayde.tasks.plan.get_github_client") as mock_gc, \
              patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.tasks.plan.update_issue_state") as mock_update, \
-             patch("clayde.tasks.plan.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.plan.fetch_issue", return_value=mock_issue) as mock_fi, \
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
@@ -262,7 +265,8 @@ class TestRunPreliminary:
 
         calls = mock_update.call_args_list
         assert calls[0][0] == ("https://github.com/o/r/issues/1",
-                               {"status": "preliminary_planning", "owner": "o", "repo": "r", "number": 1})
+                               {"status": "preliminary_planning", "owner": "o", "repo": "r", "number": 1,
+                                "issue_title": "Test issue"})
         last = calls[-1][0][1]
         assert last["status"] == "awaiting_preliminary_approval"
         assert last["preliminary_comment_id"] == 999

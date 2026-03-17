@@ -17,6 +17,7 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
@@ -48,6 +49,19 @@ _STATUS_COMPAT = {
 }
 
 
+def _issue_label(issue_state: dict) -> str:
+    """Return '#N: title' for display in log lines.
+
+    In PR phases, prefers pr_title over issue_title.
+    Falls back to '#N (title unknown)' when no title is cached.
+    """
+    number = issue_state.get("number", "?")
+    title = issue_state.get("pr_title") or issue_state.get("issue_title")
+    if title:
+        return f"#{number}: {title}"
+    return f"#{number} (title unknown)"
+
+
 def _handle_new_issue(g: Github, issue: Issue, url: str) -> None:
     """Handle a newly assigned issue — check for visible content and blocked state."""
     tracer = get_tracer()
@@ -57,7 +71,7 @@ def _handle_new_issue(g: Github, issue: Issue, url: str) -> None:
         # Check if issue is blocked by another open issue
         try:
             if is_blocked(g, owner, repo, number):
-                log.info("Skipping issue %s — blocked by another open issue", url)
+                log.info("Skipping issue #%d: %s — blocked by another open issue", issue.number, issue.title)
                 span.set_attribute("issue.skipped", True)
                 span.set_attribute("issue.skip_reason", "blocked")
                 return
@@ -67,17 +81,17 @@ def _handle_new_issue(g: Github, issue: Issue, url: str) -> None:
         # Check if there is any visible content to work with
         comments = fetch_issue_comments(g, owner, repo, number)
         if not has_visible_content(issue, comments):
-            log.info("Skipping issue %s — no visible content (all filtered out)", url)
+            log.info("Skipping issue #%d: %s — no visible content (all filtered out)", issue.number, issue.title)
             span.set_attribute("issue.skipped", True)
             span.set_attribute("issue.skip_reason", "no_visible_content")
             return
 
-        log.info("New issue: %s — starting preliminary plan phase", url)
+        log.info("New issue #%d: %s — starting preliminary plan phase", issue.number, issue.title)
         try:
             plan.run_preliminary(url)
             span.set_attribute("issue.failed", False)
         except Exception as e:
-            log.error("ERROR in preliminary plan for %s: %s", url, e)
+            log.error("ERROR in preliminary plan for #%d: %s: %s", issue.number, issue.title, e)
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
@@ -104,36 +118,36 @@ def _handle_awaiting_approval(g: Github, url: str, issue_state: dict, *, phase: 
         span.set_attribute("issue.number", number)
 
         if not comment_id:
-            log.warning("No %s for %s — marking as failed", comment_id_key, url)
+            log.warning("No %s for %s — marking as failed", comment_id_key, _issue_label(issue_state))
             update_issue_state(url, {"status": IssueStatus.FAILED})
             return
 
         # Check for new visible comments first (plan update)
         if _has_new_comments(g, owner, repo, number, issue_state):
-            log.info("New comments on %s — updating %s plan", url, phase)
+            log.info("New comments on %s — updating %s plan", _issue_label(issue_state), phase)
             try:
                 plan.run_update(url, update_phase)
                 span.set_attribute("issue.action", "plan_update")
             except Exception as e:
-                log.error("ERROR updating %s plan for %s: %s", phase, url, e)
+                log.error("ERROR updating %s plan for %s: %s", phase, _issue_label(issue_state), e)
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
             return
 
         # Check for approval (👍 on plan comment)
         if is_plan_approved(g, owner, repo, number, comment_id):
-            log.info("%s plan approved: %s — running %s", phase.capitalize(), url, next_task_label)
+            log.info("%s plan approved: %s — running %s", phase.capitalize(), _issue_label(issue_state), next_task_label)
             try:
                 next_task(url)
                 span.set_attribute("issue.action", next_task_label)
             except Exception as e:
-                log.error("ERROR in %s for %s: %s", next_task_label, url, e)
+                log.error("ERROR in %s for %s: %s", next_task_label, _issue_label(issue_state), e)
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 update_issue_state(url, {"status": IssueStatus.FAILED})
             return
 
-        log.info("Issue %s awaiting %s approval", url, phase)
+        log.info("%s awaiting %s approval", _issue_label(issue_state), phase)
         span.set_attribute("issue.skipped", True)
         span.set_attribute("issue.skip_reason", "not_approved")
 
@@ -143,12 +157,12 @@ def _handle_pr_open(g: Github, url: str, issue_state: dict) -> None:
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.handle_pr_open", attributes={"issue.url": url}) as span:
         span.set_attribute("issue.number", issue_state.get("number", 0))
-        log.info("Checking for PR reviews on %s", url)
+        log.info("Checking for PR reviews on %s", _issue_label(issue_state))
         try:
             review.run(url)
             span.set_attribute("issue.failed", False)
         except Exception as e:
-            log.error("ERROR in review handling for %s: %s", url, e)
+            log.error("ERROR in review handling for %s: %s", _issue_label(issue_state), e)
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
@@ -160,7 +174,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
     tracer = get_tracer()
     phase = issue_state.get("interrupted_phase")
     with tracer.start_as_current_span("clayde.handle_interrupted", attributes={"issue.url": url, "issue.interrupted_phase": phase or "unknown"}) as span:
-        log.info("Retrying interrupted issue %s (phase: %s)", url, phase)
+        log.info("Retrying interrupted %s (phase: %s)", _issue_label(issue_state), phase)
 
         task_map = {
             IssueStatus.PRELIMINARY_PLANNING: plan.run_preliminary,
@@ -170,7 +184,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
         }
         task = task_map.get(phase)
         if task is None:
-            log.warning("Unknown interrupted_phase '%s' for %s — skipping", phase, url)
+            log.warning("Unknown interrupted_phase %r for %s — skipping", phase, _issue_label(issue_state))
             span.set_attribute("issue.skipped", True)
             span.set_attribute("issue.skip_reason", "unknown_phase")
             return
@@ -178,7 +192,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
             task(url)
             span.set_attribute("issue.failed", False)
         except Exception as e:
-            log.error("ERROR retrying interrupted issue %s: %s", url, e)
+            log.error("ERROR retrying interrupted %s: %s", _issue_label(issue_state), e)
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
@@ -199,7 +213,7 @@ def main():
     if not settings.enabled:
         sys.exit(0)
 
-    log.info("=== Starting Clayde Tick ===")
+    log.info("=== Starting Clayde Tick [%s] ===", datetime.now().strftime("%Y-%m-%d %H:%M"))
 
     os.environ["GH_TOKEN"] = settings.github_token
 
@@ -257,7 +271,7 @@ def main():
             elif status == IssueStatus.INTERRUPTED:
                 _handle_interrupted(url, issue_state)
             elif status == IssueStatus.FAILED:
-                log.info("Skipping failed issue: %s (clear state to retry)", url)
+                log.info("Skipping failed issue %s (clear state to retry)", _issue_label(issue_state))
 
         tick_span.set_attribute("issues.processed", processed)
 

@@ -46,18 +46,18 @@ def run_preliminary(issue_url: str) -> None:
         span.set_attribute("issue.number", number)
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
+        issue = fetch_issue(g, owner, repo, number)
         update_issue_state(issue_url, {
             "status": IssueStatus.PRELIMINARY_PLANNING,
             "owner": owner, "repo": repo, "number": number,
+            "issue_title": issue.title,
         })
-
-        issue = fetch_issue(g, owner, repo, number)
         default_branch = get_default_branch(g, owner, repo)
         repo_path = ensure_repo(owner, repo, default_branch)
 
         prompt = _build_preliminary_prompt(g, issue, owner, repo, number, repo_path)
 
-        log.info("Invoking Claude for preliminary plan on issue #%d", number)
+        log.info("Invoking Claude for preliminary plan on #%d: %s", number, issue.title)
         try:
             result = invoke_claude(prompt, repo_path)
         except UsageLimitError as e:
@@ -75,14 +75,14 @@ def run_preliminary(issue_url: str) -> None:
         span.set_attribute("plan.output_length", len(plan_text))
 
         if not plan_text.strip():
-            log.error("Claude returned empty preliminary plan for issue #%d", number)
+            log.error("Claude returned empty preliminary plan for #%d: %s", number, issue.title)
             span.set_attribute("plan.status", "empty")
             update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
 
         if len(plan_text.strip()) < 100:
-            log.warning("Claude returned very short preliminary plan for issue #%d (%d chars)",
-                        number, len(plan_text.strip()))
+            log.warning("Claude returned very short preliminary plan for #%d: %s (%d chars)",
+                        number, issue.title, len(plan_text.strip()))
             span.set_attribute("plan.status", "short")
             update_issue_state(issue_url, {
                 "status": IssueStatus.INTERRUPTED,
@@ -102,7 +102,7 @@ def run_preliminary(issue_url: str) -> None:
             "last_seen_comment_id": last_comment_id,
         })
         span.set_attribute("plan.status", "posted")
-        log.info("Preliminary plan posted for issue #%d (comment %s)", number, comment_id)
+        log.info("Preliminary plan posted for #%d: %s (comment %s)", number, issue.title, comment_id)
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ def run_thorough(issue_url: str) -> None:
             preliminary_text, discussion_text,
         )
 
-        log.info("Invoking Claude for thorough plan on issue #%d", number)
+        log.info("Invoking Claude for thorough plan on #%d: %s", number, issue.title)
         try:
             result = invoke_claude(prompt, repo_path)
         except UsageLimitError as e:
@@ -157,14 +157,14 @@ def run_thorough(issue_url: str) -> None:
         span.set_attribute("plan.output_length", len(plan_text))
 
         if not plan_text.strip():
-            log.error("Claude returned empty thorough plan for issue #%d", number)
+            log.error("Claude returned empty thorough plan for #%d: %s", number, issue.title)
             span.set_attribute("plan.status", "empty")
             update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
 
         if len(plan_text.strip()) < 200:
-            log.warning("Claude returned very short thorough plan for issue #%d (%d chars)",
-                        number, len(plan_text.strip()))
+            log.warning("Claude returned very short thorough plan for #%d: %s (%d chars)",
+                        number, issue.title, len(plan_text.strip()))
             span.set_attribute("plan.status", "short")
             update_issue_state(issue_url, {
                 "status": IssueStatus.INTERRUPTED,
@@ -184,7 +184,7 @@ def run_thorough(issue_url: str) -> None:
             "last_seen_comment_id": last_comment_id,
         })
         span.set_attribute("plan.status", "posted")
-        log.info("Thorough plan posted for issue #%d (comment %s)", number, comment_id)
+        log.info("Thorough plan posted for #%d: %s (comment %s)", number, issue.title, comment_id)
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ def run_update(issue_url: str, phase: str) -> None:
         new_comments = get_new_visible_comments(all_comments, last_seen)
 
         if not new_comments:
-            log.info("No new visible comments for issue #%d — skipping update", number)
+            log.info("No new visible comments for #%d: %s — skipping update", number, issue.title)
             return
 
         new_comments_text = "\n---\n".join(
@@ -246,7 +246,7 @@ def run_update(issue_url: str, phase: str) -> None:
             phase=phase,
         )
 
-        log.info("Invoking Claude for plan update on issue #%d (%s phase)", number, phase)
+        log.info("Invoking Claude for plan update on #%d: %s (%s phase)", number, issue.title, phase)
         try:
             result = invoke_claude(prompt, repo_path)
         except UsageLimitError as e:
@@ -267,7 +267,7 @@ def run_update(issue_url: str, phase: str) -> None:
         if updated_plan:
             # Edit the existing plan comment
             edit_comment(g, owner, repo, number, plan_comment_id, updated_plan)
-            log.info("Updated %s plan comment %d for issue #%d", phase, plan_comment_id, number)
+            log.info("Updated %s plan comment %d for #%d: %s", phase, plan_comment_id, number, issue.title)
 
         if summary:
             # Post a new comment with the change summary
@@ -283,7 +283,7 @@ def run_update(issue_url: str, phase: str) -> None:
             "last_seen_comment_id": last_comment_id,
         })
         span.set_attribute("plan.update_status", "updated")
-        log.info("Plan update complete for issue #%d", number)
+        log.info("Plan update complete for #%d: %s", number, issue.title)
 
 
 
