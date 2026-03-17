@@ -135,6 +135,38 @@ class TestMain:
             main()
             mock_handle.assert_called_once()
 
+    @pytest.mark.parametrize("transient_status", [
+        "preliminary_planning",
+        "planning",
+        "implementing",
+        "addressing_review",
+    ])
+    def test_recovers_transient_state_to_interrupted(self, transient_status):
+        """Issues stuck in transient states are converted to interrupted."""
+        issue = MagicMock()
+        issue.html_url = "url1"
+        state = {"issues": {"url1": {"status": transient_status, "number": 1}}}
+        recovered_state = {"issues": {"url1": {
+            "status": "interrupted",
+            "interrupted_phase": transient_status,
+            "number": 1,
+        }}}
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
+             patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.get_github_client"), \
+             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
+             patch("clayde.orchestrator.load_state", side_effect=[state, recovered_state]), \
+             patch("clayde.orchestrator.update_issue_state") as mock_update, \
+             patch("clayde.orchestrator._handle_interrupted") as mock_handle:
+            main()
+            mock_update.assert_called_once_with(
+                "url1",
+                {"status": "interrupted", "interrupted_phase": transient_status},
+            )
+            mock_handle.assert_called_once()
+
     def test_backward_compat_awaiting_approval(self):
         """Old 'awaiting_approval' status maps to 'awaiting_plan_approval'."""
         issue = MagicMock()
