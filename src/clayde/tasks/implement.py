@@ -231,7 +231,11 @@ def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
 
     try:
         issue_author = get_issue_author(g, owner, repo, number)
-        add_pr_reviewer(g, owner, repo, pr_number, issue_author)
+        settings = get_settings()
+        if issue_author.lower() == settings.github_username.lower():
+            log.info("Issue author is %s (self) — skipping reviewer assignment", issue_author)
+        else:
+            add_pr_reviewer(g, owner, repo, pr_number, issue_author)
     except Exception as e:
         log.warning("Failed to assign reviewer for PR %s: %s", pr_url, e)
 
