@@ -17,6 +17,11 @@ def _get_repo(g: Github, owner: str, repo: str):
     return g.get_repo(f"{owner}/{repo}")
 
 
+def issue_ref(owner: str, repo: str, number: int) -> str:
+    """Return 'owner/repo#number' for use in log lines and status output."""
+    return f"{owner}/{repo}#{number}"
+
+
 def parse_issue_url(url: str) -> tuple[str, str, int]:
     m = re.match(r"https://github\.com/([^/]+)/([^/]+)/issues/(\d+)", url)
     if not m:
