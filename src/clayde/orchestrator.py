@@ -32,6 +32,7 @@ from clayde.github import (
     fetch_issue_comments,
     get_assigned_issues,
     is_blocked,
+    issue_ref,
     parse_issue_url,
 )
 from clayde.safety import get_new_visible_comments, has_visible_content, is_plan_approved
@@ -50,16 +51,15 @@ _STATUS_COMPAT = {
 
 
 def _issue_label(issue_state: dict) -> str:
-    """Return '#N: title' for display in log lines.
-
-    In PR phases, prefers pr_title over issue_title.
-    Falls back to '#N (title unknown)' when no title is cached.
-    """
+    """Return 'owner/repo#N: title' for display in log lines."""
+    owner = issue_state.get("owner", "?")
+    repo = issue_state.get("repo", "?")
     number = issue_state.get("number", "?")
     title = issue_state.get("pr_title") or issue_state.get("issue_title")
+    ref = issue_ref(owner, repo, number)
     if title:
-        return f"#{number}: {title}"
-    return f"#{number} (title unknown)"
+        return f"{ref}: {title}"
+    return f"{ref} (title unknown)"
 
 
 def _handle_new_issue(g: Github, issue: Issue, url: str) -> None:
@@ -69,29 +69,31 @@ def _handle_new_issue(g: Github, issue: Issue, url: str) -> None:
         owner, repo, number = parse_issue_url(url)
 
         # Check if issue is blocked by another open issue
+        ref = issue_ref(owner, repo, number)
+        label = f"{ref}: {issue.title}"
         try:
             if is_blocked(g, owner, repo, number):
-                log.info("Skipping issue #%d: %s — blocked by another open issue", issue.number, issue.title)
+                log.info("[%s] Skipping — blocked by another open issue", label)
                 span.set_attribute("issue.skipped", True)
                 span.set_attribute("issue.skip_reason", "blocked")
                 return
         except Exception as e:
-            log.warning("Failed to check blocked status for %s: %s — proceeding", url, e)
+            log.warning("[%s] Failed to check blocked status: %s — proceeding", label, e)
 
         # Check if there is any visible content to work with
         comments = fetch_issue_comments(g, owner, repo, number)
         if not has_visible_content(issue, comments):
-            log.info("Skipping issue #%d: %s — no visible content (all filtered out)", issue.number, issue.title)
+            log.info("[%s] Skipping — no visible content (all filtered out)", label)
             span.set_attribute("issue.skipped", True)
             span.set_attribute("issue.skip_reason", "no_visible_content")
             return
 
-        log.info("New issue #%d: %s — starting preliminary plan phase", issue.number, issue.title)
+        log.info("[%s] New issue — starting preliminary plan phase", label)
         try:
             plan.run_preliminary(url)
             span.set_attribute("issue.failed", False)
         except Exception as e:
-            log.error("ERROR in preliminary plan for #%d: %s: %s", issue.number, issue.title, e)
+            log.error("[%s] ERROR in preliminary plan: %s", label, e)
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
@@ -118,36 +120,36 @@ def _handle_awaiting_approval(g: Github, url: str, issue_state: dict, *, phase: 
         span.set_attribute("issue.number", number)
 
         if not comment_id:
-            log.warning("No %s for %s — marking as failed", comment_id_key, _issue_label(issue_state))
+            log.warning("[%s] No %s — marking as failed", _issue_label(issue_state), comment_id_key)
             update_issue_state(url, {"status": IssueStatus.FAILED})
             return
 
         # Check for new visible comments first (plan update)
         if _has_new_comments(g, owner, repo, number, issue_state):
-            log.info("New comments on %s — updating %s plan", _issue_label(issue_state), phase)
+            log.info("[%s] New comments — updating %s plan", _issue_label(issue_state), phase)
             try:
                 plan.run_update(url, update_phase)
                 span.set_attribute("issue.action", "plan_update")
             except Exception as e:
-                log.error("ERROR updating %s plan for %s: %s", phase, _issue_label(issue_state), e)
+                log.error("[%s] ERROR updating %s plan: %s", _issue_label(issue_state), phase, e)
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
             return
 
         # Check for approval (👍 on plan comment)
         if is_plan_approved(g, owner, repo, number, comment_id):
-            log.info("%s plan approved: %s — running %s", phase.capitalize(), _issue_label(issue_state), next_task_label)
+            log.info("[%s] %s plan approved — running %s", _issue_label(issue_state), phase.capitalize(), next_task_label)
             try:
                 next_task(url)
                 span.set_attribute("issue.action", next_task_label)
             except Exception as e:
-                log.error("ERROR in %s for %s: %s", next_task_label, _issue_label(issue_state), e)
+                log.error("[%s] ERROR in %s: %s", _issue_label(issue_state), next_task_label, e)
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 update_issue_state(url, {"status": IssueStatus.FAILED})
             return
 
-        log.info("%s awaiting %s approval", _issue_label(issue_state), phase)
+        log.info("[%s] Awaiting %s approval", _issue_label(issue_state), phase)
         span.set_attribute("issue.skipped", True)
         span.set_attribute("issue.skip_reason", "not_approved")
 
@@ -157,12 +159,12 @@ def _handle_pr_open(g: Github, url: str, issue_state: dict) -> None:
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.handle_pr_open", attributes={"issue.url": url}) as span:
         span.set_attribute("issue.number", issue_state.get("number", 0))
-        log.info("Checking for PR reviews on %s", _issue_label(issue_state))
+        log.info("[%s] Checking for PR reviews", _issue_label(issue_state))
         try:
             review.run(url)
             span.set_attribute("issue.failed", False)
         except Exception as e:
-            log.error("ERROR in review handling for %s: %s", _issue_label(issue_state), e)
+            log.error("[%s] ERROR in review handling: %s", _issue_label(issue_state), e)
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
@@ -174,7 +176,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
     tracer = get_tracer()
     phase = issue_state.get("interrupted_phase")
     with tracer.start_as_current_span("clayde.handle_interrupted", attributes={"issue.url": url, "issue.interrupted_phase": phase or "unknown"}) as span:
-        log.info("Retrying interrupted %s (phase: %s)", _issue_label(issue_state), phase)
+        log.info("[%s] Retrying interrupted issue (phase: %s)", _issue_label(issue_state), phase)
 
         task_map = {
             IssueStatus.PRELIMINARY_PLANNING: plan.run_preliminary,
@@ -184,7 +186,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
         }
         task = task_map.get(phase)
         if task is None:
-            log.warning("Unknown interrupted_phase %r for %s — skipping", phase, _issue_label(issue_state))
+            log.warning("[%s] Unknown interrupted_phase '%s' — skipping", _issue_label(issue_state), phase)
             span.set_attribute("issue.skipped", True)
             span.set_attribute("issue.skip_reason", "unknown_phase")
             return
@@ -192,7 +194,7 @@ def _handle_interrupted(url: str, issue_state: dict) -> None:
             task(url)
             span.set_attribute("issue.failed", False)
         except Exception as e:
-            log.error("ERROR retrying interrupted %s: %s", _issue_label(issue_state), e)
+            log.error("[%s] ERROR retrying interrupted issue: %s", _issue_label(issue_state), e)
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.set_attribute("issue.failed", True)
@@ -271,7 +273,7 @@ def main():
             elif status == IssueStatus.INTERRUPTED:
                 _handle_interrupted(url, issue_state)
             elif status == IssueStatus.FAILED:
-                log.info("Skipping failed issue %s (clear state to retry)", _issue_label(issue_state))
+                log.info("[%s] Skipping failed issue (clear state to retry)", _issue_label(issue_state))
 
         tick_span.set_attribute("issues.processed", processed)
 

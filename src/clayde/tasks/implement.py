@@ -23,6 +23,7 @@ from clayde.github import (
     get_default_branch,
     get_issue_author,
     get_pr_title,
+    issue_ref,
     parse_issue_url,
     parse_pr_url,
     post_comment,
@@ -56,7 +57,7 @@ def run(issue_url: str) -> None:
             _prepare_implementation_context(g, owner, repo, number, issue_url, issue_state, resumed)
         )
 
-        log.info("Invoking Claude for implementation of #%d: %s", number, issue.title)
+        log.info("[%s: %s] Invoking Claude for implementation", issue_ref(owner, repo, number), issue.title)
         try:
             result = invoke_claude(
                 prompt,
@@ -65,7 +66,7 @@ def run(issue_url: str) -> None:
                 conversation_path=conversation_path,
             )
         except UsageLimitError as e:
-            log.warning("Usage limit hit during implementation #%d — will retry next cycle", number)
+            log.warning("[%s: %s] Usage limit hit during implementation — will retry next cycle", issue_ref(owner, repo, number), issue.title)
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("implement.status", "limit")
             update_issue_state(issue_url, {
@@ -81,7 +82,7 @@ def run(issue_url: str) -> None:
         if pr_url:
             _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span, cost_eur=total_cost)
         else:
-            log.error("Implementation of #%d: %s produced no PR", number, issue.title)
+            log.error("[%s: %s] Implementation produced no PR", issue_ref(owner, repo, number), issue.title)
             log.error("Claude output (last 2000 chars): %s", (result.output or "")[-2000:])
             _handle_no_pr(g, owner, repo, number, issue_url, issue_state, span)
 
@@ -226,7 +227,7 @@ def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
     try:
         pr_title = get_pr_title(g, owner, repo, pr_number)
     except Exception as e:
-        log.warning("Failed to fetch PR title for %s: %s", pr_url, e)
+        log.warning("Failed to fetch PR title for PR %s: %s", pr_url, e)
 
     try:
         issue_author = get_issue_author(g, owner, repo, number)
@@ -245,9 +246,9 @@ def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
     update_issue_state(issue_url, state_update)
     span.set_attribute("implement.status", "pr_open")
     span.set_attribute("implement.pr_url", pr_url)
-
-    display = f"#{number}: {pr_title}" if pr_title else f"#{number} (title unknown)"
-    log.info("Issue %s — PR open, monitoring for reviews: %s", display, pr_url)
+    ref = issue_ref(owner, repo, number)
+    label = f"{ref}: {pr_title}" if pr_title else ref
+    log.info("[%s] PR open — monitoring for reviews: %s", label, pr_url)
 
 
 def _checkout_wip_branch(repo_path, branch_name: str) -> None:

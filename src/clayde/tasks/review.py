@@ -11,6 +11,7 @@ from clayde.github import (
     get_default_branch,
     get_pr_review_comments,
     get_pr_reviews,
+    issue_ref,
     parse_issue_url,
     parse_pr_url,
     post_comment,
@@ -33,11 +34,11 @@ def run(issue_url: str) -> None:
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
 
-        _title = issue_state.get("pr_title") or issue_state.get("issue_title")
-        _display = f"#{number}: {_title}" if _title else f"#{number} (title unknown)"
+        issue_title = issue_state.get("pr_title") or issue_state.get("issue_title") or "(title unknown)"
+        issue_label = f"{issue_ref(owner, repo, number)}: {issue_title}"
 
         if not pr_url:
-            log.warning("No PR URL in state for %s — skipping review", _display)
+            log.warning("[%s] No PR URL in state — skipping review", issue_label)
             return
 
         _, _, pr_number = parse_pr_url(pr_url)
@@ -53,7 +54,7 @@ def run(issue_url: str) -> None:
         ]
 
         if not new_reviews:
-            log.info("No new reviews on PR #%d for %s", pr_number, _display)
+            log.info("[%s] No new reviews on PR #%d", issue_label, pr_number)
             return
 
         # Check if any new review has actual content (comments or body)
@@ -78,7 +79,7 @@ def run(issue_url: str) -> None:
             # Check if any review is an approval
             approved = any(r.state == "APPROVED" for r in new_reviews)
             if approved:
-                log.info("PR #%d approved for %s — marking as done", pr_number, _display)
+                log.info("[%s] PR #%d approved — marking as done", issue_label, pr_number)
                 update_issue_state(issue_url, {"status": IssueStatus.DONE})
                 span.set_attribute("review.status", "approved")
             return
@@ -86,8 +87,8 @@ def run(issue_url: str) -> None:
         # Build review text for Claude
         review_text = _format_reviews(new_reviews, relevant_comments)
 
-        log.info("Addressing %d new review(s) on PR #%d for %s",
-                 len(new_reviews), pr_number, _display)
+        log.info("[%s] Addressing %d new review(s) on PR #%d",
+                 issue_label, len(new_reviews), pr_number)
 
         update_issue_state(issue_url, {"status": IssueStatus.ADDRESSING_REVIEW})
 
@@ -110,7 +111,7 @@ def run(issue_url: str) -> None:
                 conversation_path=conversation_path,
             )
         except UsageLimitError as e:
-            log.warning("Usage limit hit during review handling #%d", number)
+            log.warning("[%s] Usage limit hit during review handling", issue_label)
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("review.status", "limit")
             update_issue_state(issue_url, {
@@ -134,7 +135,7 @@ def run(issue_url: str) -> None:
             "last_seen_review_id": max_review_id,
         })
         span.set_attribute("review.status", "addressed")
-        log.info("Review comments addressed for %s", _display)
+        log.info("[%s] Review comments addressed", issue_label)
 
 
 def _format_reviews(reviews: list, review_comments: list) -> str:

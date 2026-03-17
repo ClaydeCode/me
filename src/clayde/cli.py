@@ -3,6 +3,7 @@
 import argparse
 import sys
 
+from clayde.github import issue_ref
 from clayde.state import load_state, save_state
 
 
@@ -17,10 +18,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         number = entry.get("number", "?")
         owner = entry.get("owner", "")
         repo = entry.get("repo", "")
-        repo_ref = f"{owner}/{repo}" if owner and repo else url
+        ref = issue_ref(owner, repo, number) if owner and repo else f"#{number}"
         title = entry.get("pr_title") or entry.get("issue_title") or "(title unknown)"
         pr_url = entry.get("pr_url")
-        print(f"{status:<28} #{number}  {title}  ({repo_ref})")
+        print(f"{status:<28} {ref}  {title}")
         if pr_url:
             print(f"{'':28} └─ PR: {pr_url}")
 

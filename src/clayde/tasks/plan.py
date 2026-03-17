@@ -20,6 +20,7 @@ from clayde.github import (
     fetch_issue,
     fetch_issue_comments,
     get_default_branch,
+    issue_ref,
     parse_issue_url,
     post_comment,
 )
@@ -57,7 +58,7 @@ def run_preliminary(issue_url: str) -> None:
 
         prompt = _build_preliminary_prompt(g, issue, owner, repo, number, repo_path)
 
-        log.info("Invoking Claude for preliminary plan on #%d: %s", number, issue.title)
+        log.info("[%s: %s] Invoking Claude for preliminary plan", issue_ref(owner, repo, number), issue.title)
         try:
             result = invoke_claude(prompt, repo_path)
         except UsageLimitError as e:
@@ -102,7 +103,7 @@ def run_preliminary(issue_url: str) -> None:
             "last_seen_comment_id": last_comment_id,
         })
         span.set_attribute("plan.status", "posted")
-        log.info("Preliminary plan posted for #%d: %s (comment %s)", number, issue.title, comment_id)
+        log.info("[%s: %s] Preliminary plan posted (comment %s)", issue_ref(owner, repo, number), issue.title, comment_id)
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +140,7 @@ def run_thorough(issue_url: str) -> None:
             preliminary_text, discussion_text,
         )
 
-        log.info("Invoking Claude for thorough plan on #%d: %s", number, issue.title)
+        log.info("[%s: %s] Invoking Claude for thorough plan", issue_ref(owner, repo, number), issue.title)
         try:
             result = invoke_claude(prompt, repo_path)
         except UsageLimitError as e:
@@ -184,7 +185,7 @@ def run_thorough(issue_url: str) -> None:
             "last_seen_comment_id": last_comment_id,
         })
         span.set_attribute("plan.status", "posted")
-        log.info("Thorough plan posted for #%d: %s (comment %s)", number, issue.title, comment_id)
+        log.info("[%s: %s] Thorough plan posted (comment %s)", issue_ref(owner, repo, number), issue.title, comment_id)
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +230,7 @@ def run_update(issue_url: str, phase: str) -> None:
         new_comments = get_new_visible_comments(all_comments, last_seen)
 
         if not new_comments:
-            log.info("No new visible comments for #%d: %s — skipping update", number, issue.title)
+            log.info("[%s: %s] No new visible comments — skipping update", issue_ref(owner, repo, number), issue.title)
             return
 
         new_comments_text = "\n---\n".join(
@@ -246,7 +247,7 @@ def run_update(issue_url: str, phase: str) -> None:
             phase=phase,
         )
 
-        log.info("Invoking Claude for plan update on #%d: %s (%s phase)", number, issue.title, phase)
+        log.info("[%s: %s] Invoking Claude for plan update (%s phase)", issue_ref(owner, repo, number), issue.title, phase)
         try:
             result = invoke_claude(prompt, repo_path)
         except UsageLimitError as e:
@@ -267,7 +268,7 @@ def run_update(issue_url: str, phase: str) -> None:
         if updated_plan:
             # Edit the existing plan comment
             edit_comment(g, owner, repo, number, plan_comment_id, updated_plan)
-            log.info("Updated %s plan comment %d for #%d: %s", phase, plan_comment_id, number, issue.title)
+            log.info("[%s: %s] Updated %s plan comment %d", issue_ref(owner, repo, number), issue.title, phase, plan_comment_id)
 
         if summary:
             # Post a new comment with the change summary
@@ -283,7 +284,7 @@ def run_update(issue_url: str, phase: str) -> None:
             "last_seen_comment_id": last_comment_id,
         })
         span.set_attribute("plan.update_status", "updated")
-        log.info("Plan update complete for #%d: %s", number, issue.title)
+        log.info("[%s: %s] Plan update complete", issue_ref(owner, repo, number), issue.title)
 
 
 
