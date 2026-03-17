@@ -1,4 +1,4 @@
-Research the following GitHub issue and produce a detailed implementation plan.
+Research the following GitHub issue and produce an implementation plan.
 
 ISSUE #{{ number }}: {{ title }}
 REPO: {{ owner }}/{{ repo }}
@@ -17,12 +17,22 @@ REPOSITORY ON DISK: {{ repo_path }}
 
 Explore the repository to understand the codebase relevant to this issue.
 Pay special attention to agents.md files throughout.
-Then produce a thorough plan that includes:
+Then produce a plan that describes WHAT needs to change, not HOW to change it.
+The plan will be reviewed by a human, so prioritize clarity and readability.
+Use clear structure, short paragraphs, and plain language.
+
+The plan should include:
 - Summary of what needs to be done and why
-- Files to create or modify (with specific locations)
-- Implementation approach and key decisions
+- Which files and components are affected
+- Key design decisions (if any alternatives exist, state which you chose and why)
 - Edge cases and risks
 - How to verify the implementation is correct
+
+HARD LIMIT: The plan must be 500 words or fewer (excluding the branch name line).
+Do NOT include code snippets, exact code changes, step-by-step implementation
+instructions, or line-by-line diffs. The implementing model will read the codebase
+itself — your job is to describe the desired outcome clearly, not to dictate the
+implementation.
 
 At the end of your plan, include a branch name suggestion on its own line in
 exactly this format:

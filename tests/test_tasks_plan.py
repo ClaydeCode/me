@@ -115,7 +115,7 @@ class TestBuildThoroughPrompt:
             )
         assert "my preliminary plan" in prompt
         assert "discussion text" in prompt
-        assert "thorough" in prompt.lower() or "detailed" in prompt.lower()
+        assert "implementation plan" in prompt.lower()
 
 
 class TestBuildUpdatePrompt:
