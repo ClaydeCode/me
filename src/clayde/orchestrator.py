@@ -240,6 +240,30 @@ def main():
             provider.force_flush()
             return
 
+        # Recover issues stuck in transient states (e.g. from a crash/restart)
+        _TRANSIENT_STATES = {
+            IssueStatus.PRELIMINARY_PLANNING,
+            IssueStatus.PLANNING,
+            IssueStatus.IMPLEMENTING,
+            IssueStatus.ADDRESSING_REVIEW,
+        }
+        for url, ist in issues_state.items():
+            status = ist.get("status")
+            status = _STATUS_COMPAT.get(status, status)
+            if status in _TRANSIENT_STATES:
+                log.warning(
+                    "Recovering stuck %s (was %s → interrupted)",
+                    _issue_label(ist),
+                    status,
+                )
+                update_issue_state(
+                    url,
+                    {"status": IssueStatus.INTERRUPTED, "interrupted_phase": status},
+                )
+
+        # Reload state after recovery mutations
+        issues_state = load_state().get("issues", {})
+
         processed = 0
         for issue in assigned:
             url = issue.html_url
@@ -249,14 +273,7 @@ def main():
             # Backward compatibility
             status = _STATUS_COMPAT.get(status, status)
 
-            # Skip in-progress or completed states
-            if status in (
-                IssueStatus.DONE,
-                IssueStatus.PRELIMINARY_PLANNING,
-                IssueStatus.PLANNING,
-                IssueStatus.IMPLEMENTING,
-                IssueStatus.ADDRESSING_REVIEW,
-            ):
+            if status == IssueStatus.DONE:
                 continue
 
             processed += 1
