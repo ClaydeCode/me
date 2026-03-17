@@ -103,6 +103,7 @@ def run(issue_url: str) -> None:
 
         conversation_path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}-review.json"
 
+        log.info("[%s] Invoking Claude to address review", issue_label)
         try:
             result = invoke_claude(
                 prompt,
