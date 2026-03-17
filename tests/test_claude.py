@@ -588,6 +588,11 @@ class TestLimitPatterns:
     def test_no_false_positive(self):
         assert _is_limit_error("Here is the implementation") is False
 
+    def test_no_false_positive_generic_phrases(self):
+        assert _is_limit_error("you've reached the end of the file") is False
+        assert _is_limit_error("exceeded your expectations") is False
+        assert _is_limit_error("the counter resets at midnight") is False
+
 
 class TestMakeCliEnv:
     def test_removes_claudecode(self, monkeypatch):
@@ -673,8 +678,8 @@ class TestCliBackendInvoke:
     def test_limit_detection_raises(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
         mock_result = MagicMock()
-        mock_result.stdout = "You've reached your usage limit"
-        mock_result.stderr = ""
+        mock_result.stdout = "{}"
+        mock_result.stderr = "You've reached your usage limit"
         mock_result.returncode = 1
         backend = CliBackend()
 
@@ -686,6 +691,22 @@ class TestCliBackendInvoke:
             with pytest.raises(UsageLimitError):
                 backend.invoke("prompt", "/repo", branch_name="branch")
             mock_wip.assert_called_once_with("/repo", "branch")
+
+    def test_no_limit_detection_on_success(self, tmp_path):
+        """Successful invocations mentioning 'rate limit' in output should not raise."""
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        mock_result = MagicMock()
+        mock_result.stdout = self._cli_json_output("I added rate limit handling")
+        mock_result.stderr = ""
+        mock_result.returncode = 0
+        backend = CliBackend()
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
+            result = backend.invoke("prompt", "/repo")
+            assert result.output == "I added rate limit handling"
 
     def test_limit_saves_session_before_raising(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
@@ -755,8 +776,8 @@ class TestCliBackendIsAvailable:
 
     def test_unavailable_on_limit(self):
         mock_result = MagicMock()
-        mock_result.stdout = "You've reached your usage limit"
-        mock_result.stderr = ""
+        mock_result.stdout = "{}"
+        mock_result.stderr = "You've reached your usage limit"
         mock_result.returncode = 1
         backend = CliBackend()
 

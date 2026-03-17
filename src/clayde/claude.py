@@ -34,16 +34,12 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
 # EUR/USD conversion rate — last updated: 2026-03
 _EUR_PER_USD = 0.92
 
-# Text patterns that indicate a usage/rate limit in CLI output.
+# Text patterns that indicate a usage/rate limit in CLI error output.
 _LIMIT_PATTERNS = [
     "usage limit",
     "rate limit",
     "session limit",
-    "claude code pro",
-    "you've reached",
-    "exceeded your",
     "hit your limit",
-    "resets at",
 ]
 
 
@@ -516,15 +512,15 @@ class CliBackend(ClaudeBackend):
             span.set_attribute("claude.timeout", False)
             span.set_attribute("claude.exit_code", result.returncode)
 
-            combined = (result.stdout or "") + (result.stderr or "")
-
             # Parse JSON output
             output_text = ""
             session_id = None
+            is_error = False
             try:
                 parsed = json.loads(result.stdout)
                 output_text = parsed.get("result", "")
                 session_id = parsed.get("session_id")
+                is_error = parsed.get("is_error", False)
             except (json.JSONDecodeError, TypeError):
                 # Fall back to raw stdout if JSON parsing fails
                 output_text = result.stdout or ""
@@ -533,15 +529,21 @@ class CliBackend(ClaudeBackend):
             if conversation_path and session_id:
                 self._save_session_id(conversation_path, session_id)
 
-            # Check for usage/rate limits
-            if _is_limit_error(combined):
-                log.error("Claude CLI usage limit detected")
-                if branch_name:
-                    commit_wip(repo_path, branch_name)
-                span.set_attribute("claude.usage_limit", True)
-                exc = UsageLimitError("Claude CLI usage limit hit")
-                span.record_exception(exc)
-                raise exc
+            # Check for usage/rate limits only when there's an error signal.
+            # Never scan the full stdout — it contains the LLM response which
+            # could legitimately mention "rate limit" etc.
+            if result.returncode != 0 or is_error:
+                error_text = result.stderr or ""
+                if is_error:
+                    error_text += " " + output_text
+                if _is_limit_error(error_text):
+                    log.error("Claude CLI usage limit detected")
+                    if branch_name:
+                        commit_wip(repo_path, branch_name)
+                    span.set_attribute("claude.usage_limit", True)
+                    exc = UsageLimitError("Claude CLI usage limit hit")
+                    span.record_exception(exc)
+                    raise exc
 
             if result.returncode != 0:
                 log.error("Claude CLI exited with code %d", result.returncode)
@@ -568,8 +570,15 @@ class CliBackend(ClaudeBackend):
                      "--no-session-persistence"],
                     env=_make_cli_env(), text=True, capture_output=True, timeout=60,
                 )
-                combined = (result.stdout or "") + (result.stderr or "")
-                if _is_limit_error(combined):
+                error_text = result.stderr or ""
+                if result.returncode != 0:
+                    try:
+                        parsed = json.loads(result.stdout)
+                        if parsed.get("is_error", False):
+                            error_text += " " + parsed.get("result", "")
+                    except (json.JSONDecodeError, TypeError):
+                        error_text += " " + (result.stdout or "")
+                if _is_limit_error(error_text):
                     span.set_attribute("claude.available", False)
                     return False
                 span.set_attribute("claude.available", True)
