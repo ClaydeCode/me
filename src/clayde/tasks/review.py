@@ -33,8 +33,11 @@ def run(issue_url: str) -> None:
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
 
+        _title = issue_state.get("pr_title") or issue_state.get("issue_title")
+        _display = f"#{number}: {_title}" if _title else f"#{number} (title unknown)"
+
         if not pr_url:
-            log.warning("No PR URL in state for issue #%d — skipping review", number)
+            log.warning("No PR URL in state for %s — skipping review", _display)
             return
 
         _, _, pr_number = parse_pr_url(pr_url)
@@ -50,7 +53,7 @@ def run(issue_url: str) -> None:
         ]
 
         if not new_reviews:
-            log.info("No new reviews on PR #%d for issue #%d", pr_number, number)
+            log.info("No new reviews on PR #%d for %s", pr_number, _display)
             return
 
         # Check if any new review has actual content (comments or body)
@@ -75,7 +78,7 @@ def run(issue_url: str) -> None:
             # Check if any review is an approval
             approved = any(r.state == "APPROVED" for r in new_reviews)
             if approved:
-                log.info("PR #%d approved for issue #%d — marking as done", pr_number, number)
+                log.info("PR #%d approved for %s — marking as done", pr_number, _display)
                 update_issue_state(issue_url, {"status": IssueStatus.DONE})
                 span.set_attribute("review.status", "approved")
             return
@@ -83,8 +86,8 @@ def run(issue_url: str) -> None:
         # Build review text for Claude
         review_text = _format_reviews(new_reviews, relevant_comments)
 
-        log.info("Addressing %d new review(s) on PR #%d for issue #%d",
-                 len(new_reviews), pr_number, number)
+        log.info("Addressing %d new review(s) on PR #%d for %s",
+                 len(new_reviews), pr_number, _display)
 
         update_issue_state(issue_url, {"status": IssueStatus.ADDRESSING_REVIEW})
 
@@ -131,7 +134,7 @@ def run(issue_url: str) -> None:
             "last_seen_review_id": max_review_id,
         })
         span.set_attribute("review.status", "addressed")
-        log.info("Review comments addressed for issue #%d", number)
+        log.info("Review comments addressed for %s", _display)
 
 
 def _format_reviews(reviews: list, review_comments: list) -> str:

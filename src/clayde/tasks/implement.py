@@ -22,6 +22,7 @@ from clayde.github import (
     find_open_pr,
     get_default_branch,
     get_issue_author,
+    get_pr_title,
     parse_issue_url,
     parse_pr_url,
     post_comment,
@@ -55,7 +56,7 @@ def run(issue_url: str) -> None:
             _prepare_implementation_context(g, owner, repo, number, issue_url, issue_state, resumed)
         )
 
-        log.info("Invoking Claude for implementation of issue #%d", number)
+        log.info("Invoking Claude for implementation of #%d: %s", number, issue.title)
         try:
             result = invoke_claude(
                 prompt,
@@ -79,7 +80,7 @@ def run(issue_url: str) -> None:
         if pr_url:
             _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span, cost_eur=total_cost)
         else:
-            log.error("Implementation of #%d produced no PR", number)
+            log.error("Implementation of #%d: %s produced no PR", number, issue.title)
             log.error("Claude output (last 2000 chars): %s", (result.output or "")[-2000:])
             _handle_no_pr(g, owner, repo, number, issue_url, issue_state, span)
 
@@ -180,21 +181,34 @@ def _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span,
     """Post result, assign reviewer, set status to pr_open."""
     _post_result(g, owner, repo, number, pr_url, cost_eur=cost_eur)
 
+    _, _, pr_number = parse_pr_url(pr_url)
+
+    pr_title = None
+    try:
+        pr_title = get_pr_title(g, owner, repo, pr_number)
+    except Exception as e:
+        log.warning("Failed to fetch PR title for %s: %s", pr_url, e)
+
     try:
         issue_author = get_issue_author(g, owner, repo, number)
-        _, _, pr_number = parse_pr_url(pr_url)
         add_pr_reviewer(g, owner, repo, pr_number, issue_author)
     except Exception as e:
         log.warning("Failed to assign reviewer for PR %s: %s", pr_url, e)
 
-    update_issue_state(issue_url, {
+    state_update = {
         "status": IssueStatus.PR_OPEN,
         "pr_url": pr_url,
         "last_seen_review_id": 0,
-    })
+    }
+    if pr_title:
+        state_update["pr_title"] = pr_title
+
+    update_issue_state(issue_url, state_update)
     span.set_attribute("implement.status", "pr_open")
     span.set_attribute("implement.pr_url", pr_url)
-    log.info("Issue #%d PR open — monitoring for reviews: %s", number, pr_url)
+
+    display = f"#{number}: {pr_title}" if pr_title else f"#{number} (title unknown)"
+    log.info("Issue %s — PR open, monitoring for reviews: %s", display, pr_url)
 
 
 def _checkout_wip_branch(repo_path, branch_name: str) -> None:
