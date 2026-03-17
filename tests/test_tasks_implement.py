@@ -135,6 +135,7 @@ class TestRun:
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
              patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("IMPLEMENTATION_COMPLETE", cost_eur=5.00)), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
+             patch("clayde.tasks.implement._ensure_branch_pushed", return_value=True), \
              patch("clayde.tasks.implement.create_pull_request", return_value="https://github.com/o/r/pull/5") as mock_cpr, \
              patch("clayde.tasks.implement._assign_reviewer_and_finish") as mock_finish, \
              patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
@@ -246,6 +247,7 @@ class TestRun:
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
              patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("IMPLEMENTATION_COMPLETE")), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
+             patch("clayde.tasks.implement._ensure_branch_pushed", return_value=True), \
              patch("clayde.tasks.implement.create_pull_request", side_effect=Exception("API error")), \
              patch("clayde.tasks.implement.post_comment"), \
              patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
@@ -273,6 +275,7 @@ class TestRun:
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
              patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("IMPLEMENTATION_COMPLETE")), \
              patch("clayde.tasks.implement.find_open_pr", return_value=None), \
+             patch("clayde.tasks.implement._ensure_branch_pushed", return_value=True), \
              patch("clayde.tasks.implement.create_pull_request", side_effect=Exception("API error")), \
              patch("clayde.tasks.implement.post_comment"), \
              patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
@@ -347,6 +350,7 @@ class TestRun:
              patch("clayde.tasks.implement.filter_comments", return_value=[]), \
              patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
              patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("done")), \
+             patch("clayde.tasks.implement._ensure_branch_pushed", return_value=True), \
              patch("clayde.tasks.implement.create_pull_request", return_value="https://github.com/o/r/pull/5"), \
              patch("clayde.tasks.implement._assign_reviewer_and_finish"), \
              patch("clayde.tasks.implement._checkout_wip_branch") as mock_checkout, \

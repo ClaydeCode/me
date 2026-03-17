@@ -75,7 +75,8 @@ def run(issue_url: str) -> None:
             return
 
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
-        pr_url = _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue)
+        pr_url = _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue,
+                                     repo_path=repo_path)
 
         if pr_url:
             _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span, cost_eur=total_cost)
@@ -130,11 +131,49 @@ def _prepare_implementation_context(g, owner, repo, number, issue_url, issue_sta
     return issue, default_branch, repo_path, branch_name, prompt, conversation_path
 
 
-def _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue) -> str | None:
+def _ensure_branch_pushed(repo_path: Path, branch_name: str) -> bool:
+    """Check if branch exists on remote; if not, try to push it.
+
+    Returns True if the branch is on the remote after this call.
+    """
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", "origin", branch_name],
+        cwd=str(repo_path), capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        return True
+
+    # Branch not on remote — check if it exists locally and push it
+    result = subprocess.run(
+        ["git", "branch", "--list", branch_name],
+        cwd=str(repo_path), capture_output=True, text=True,
+    )
+    if not result.stdout.strip():
+        log.error("Branch %s does not exist locally or on remote", branch_name)
+        return False
+
+    log.info("Branch %s exists locally but not on remote — pushing", branch_name)
+    result = subprocess.run(
+        ["git", "push", "origin", branch_name],
+        cwd=str(repo_path), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log.error("Failed to push branch %s: %s", branch_name, result.stderr)
+        return False
+
+    return True
+
+
+def _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue,
+                       repo_path: Path | None = None) -> str | None:
     """Return the PR URL for branch_name, creating it if necessary."""
     pr_url = find_open_pr(g, owner, repo, branch_name)
     if pr_url:
         return pr_url
+
+    if repo_path and not _ensure_branch_pushed(repo_path, branch_name):
+        log.error("Cannot create PR for #%d: branch %s not available on remote", number, branch_name)
+        return None
 
     try:
         pr_url = create_pull_request(
