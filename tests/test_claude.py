@@ -843,6 +843,18 @@ class TestCliBackendIsAvailable:
              patch("clayde.claude.subprocess.run", return_value=mock_result):
             assert backend.is_available() is False
 
+    def test_unavailable_on_not_logged_in(self):
+        mock_result = MagicMock()
+        mock_result.stdout = '{"is_error": true, "result": "Not logged in \\u00b7 Please run /login"}'
+        mock_result.stderr = ""
+        mock_result.returncode = 1
+        backend = CliBackend()
+
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
+            assert backend.is_available() is False
+
     def test_available_on_exception(self):
         backend = CliBackend()
 

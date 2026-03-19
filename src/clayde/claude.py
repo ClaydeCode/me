@@ -601,14 +601,20 @@ class CliBackend(ClaudeBackend):
                     env=_make_cli_env(), text=True, capture_output=True, timeout=60,
                 )
                 error_text = result.stderr or ""
-                if result.returncode != 0:
-                    try:
-                        parsed = json.loads(result.stdout)
-                        if parsed.get("is_error", False):
-                            error_text += " " + parsed.get("result", "")
-                    except (json.JSONDecodeError, TypeError):
+                is_error = False
+                try:
+                    parsed = json.loads(result.stdout)
+                    is_error = parsed.get("is_error", False)
+                    if is_error:
+                        error_text += " " + parsed.get("result", "")
+                except (json.JSONDecodeError, TypeError):
+                    if result.returncode != 0:
                         error_text += " " + (result.stdout or "")
                 if _is_limit_error(error_text):
+                    span.set_attribute("claude.available", False)
+                    return False
+                if is_error and "not logged in" in error_text.lower():
+                    log.warning("Claude CLI is not logged in — marking unavailable")
                     span.set_attribute("claude.available", False)
                     return False
                 span.set_attribute("claude.available", True)
