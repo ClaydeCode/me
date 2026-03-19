@@ -413,3 +413,65 @@ class TestCheckoutWipBranch:
 
         with patch("clayde.tasks.implement.subprocess.run", side_effect=fake_run):
             _checkout_wip_branch("/repo", "clayde/issue-1")  # Should not raise
+
+
+class TestDeleteConversationFile:
+    def test_fresh_run_deletes_stale_conversation_file(self, tmp_path):
+        """When starting a fresh (non-resumed) implementation, stale conversation files are deleted."""
+        conv_dir = tmp_path / "conversations"
+        conv_dir.mkdir()
+        conv_file = conv_dir / "o__r__issue-1.json"
+        conv_file.write_text('{"session_id": "stale"}')
+
+        with patch("clayde.tasks.implement.get_github_client"), \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
+             patch("clayde.tasks.implement.update_issue_state"), \
+             patch("clayde.tasks.implement.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement.filter_comments", return_value=[]), \
+             patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("done")), \
+             patch("clayde.tasks.implement.find_open_pr", return_value="https://github.com/o/r/pull/5"), \
+             patch("clayde.tasks.implement._assign_reviewer_and_finish"), \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
+            mock_fc.return_value.body = "plan text"
+            mock_fi.return_value.title = "Test"
+            run("https://github.com/o/r/issues/1")
+
+        assert not conv_file.exists()
+
+    def test_failed_after_retries_deletes_conversation_file(self, tmp_path):
+        """When giving up after max retries, the conversation file is cleaned up."""
+        conv_dir = tmp_path / "conversations"
+        conv_dir.mkdir()
+        conv_file = conv_dir / "o__r__issue-1.json"
+        conv_file.write_text('{"session_id": "stale"}')
+
+        with patch("clayde.tasks.implement.get_github_client"), \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100, "retry_count": 2}), \
+             patch("clayde.tasks.implement.update_issue_state"), \
+             patch("clayde.tasks.implement.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement.filter_comments", return_value=[]), \
+             patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
+             patch("clayde.tasks.implement.invoke_claude", return_value=_make_result("done")), \
+             patch("clayde.tasks.implement.find_open_pr", return_value=None), \
+             patch("clayde.tasks.implement._ensure_branch_pushed", return_value=True), \
+             patch("clayde.tasks.implement.create_pull_request", side_effect=Exception("fail")), \
+             patch("clayde.tasks.implement.post_comment"), \
+             patch("clayde.tasks.implement.pop_accumulated_cost", return_value=0.0), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
+            mock_fc.return_value.body = "plan text"
+            mock_fi.return_value.title = "Test"
+            run("https://github.com/o/r/issues/1")
+
+        assert not conv_file.exists()

@@ -35,6 +35,14 @@ from clayde.telemetry import get_tracer
 log = logging.getLogger("clayde.tasks.implement")
 
 
+def _delete_conversation_file(owner: str, repo: str, number: int) -> None:
+    """Remove the conversation file for an issue so stale sessions don't persist."""
+    path = DATA_DIR / "conversations" / f"{owner}__{repo}__issue-{number}.json"
+    if path.exists():
+        path.unlink()
+        log.info("Deleted conversation file %s", path)
+
+
 def run(issue_url: str) -> None:
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.task.implement") as span:
@@ -50,6 +58,9 @@ def run(issue_url: str) -> None:
 
         if resumed and _try_resume_from_existing_pr(g, owner, repo, number, issue_url, issue_state, span):
             return
+
+        if not resumed:
+            _delete_conversation_file(owner, repo, number)
 
         update_issue_state(issue_url, {"status": IssueStatus.IMPLEMENTING})
 
@@ -197,6 +208,7 @@ def _handle_no_pr(g, owner, repo, number, issue_url, issue_state, span) -> None:
     retry_count = issue_state.get("retry_count", 0) + 1
     if retry_count >= max_retries:
         log.error("Issue #%d failed after %d retries — giving up", number, retry_count)
+        _delete_conversation_file(owner, repo, number)
         post_comment(g, owner, repo, number,
                      "Implementation failed to produce a PR after multiple retries. "
                      "Marking as failed — manual intervention needed.")

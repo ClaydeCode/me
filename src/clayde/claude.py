@@ -509,6 +509,36 @@ class CliBackend(ClaudeBackend):
                 span.record_exception(exc)
                 raise exc
 
+            # Detect stale session ID and retry fresh
+            if (
+                result.returncode != 0
+                and "no conversation found with session id" in (result.stderr or "").lower()
+                and conversation_path
+            ):
+                log.warning("CLI session not found — deleting stale conversation file and retrying fresh")
+                conversation_path.unlink(missing_ok=True)
+                # Rebuild command without --resume
+                cmd = [
+                    cli_bin, "-p", prompt,
+                    "--append-system-prompt", identity,
+                    "--output-format", "json",
+                    "--dangerously-skip-permissions",
+                ]
+                span.set_attribute("claude.stale_session_retry", True)
+                try:
+                    result = subprocess.run(
+                        cmd, cwd=repo_path, env=_make_cli_env(),
+                        text=True, capture_output=True, timeout=timeout_s,
+                    )
+                except subprocess.TimeoutExpired:
+                    log.error("Claude CLI timed out after %ds (fresh retry)", timeout_s)
+                    if branch_name:
+                        commit_wip(repo_path, branch_name)
+                    span.set_attribute("claude.timeout", True)
+                    exc = UsageLimitError(f"Claude CLI timed out after {timeout_s}s")
+                    span.record_exception(exc)
+                    raise exc
+
             span.set_attribute("claude.timeout", False)
             span.set_attribute("claude.exit_code", result.returncode)
 
