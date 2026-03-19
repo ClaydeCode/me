@@ -760,6 +760,63 @@ class TestCliBackendInvoke:
 
         assert result.output == "plain text output"
 
+    def test_stale_session_retries_fresh(self, tmp_path):
+        """When CLI reports 'No conversation found', delete conv file and retry without --resume."""
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"
+        conv_path.write_text(json.dumps({"session_id": "stale-session"}))
+
+        stale_result = MagicMock()
+        stale_result.returncode = 1
+        stale_result.stdout = ""
+        stale_result.stderr = "No conversation found with session ID: stale-session"
+
+        fresh_result = MagicMock()
+        fresh_result.returncode = 0
+        fresh_result.stdout = json.dumps({
+            "result": "fresh output",
+            "session_id": "new-session",
+        })
+        fresh_result.stderr = ""
+
+        backend = CliBackend()
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", side_effect=[stale_result, fresh_result]) as mock_run:
+            result = backend.invoke("prompt", str(tmp_path), conversation_path=conv_path)
+
+        assert result.output == "fresh output"
+        # First call should have --resume, second should not
+        first_cmd = mock_run.call_args_list[0][0][0]
+        second_cmd = mock_run.call_args_list[1][0][0]
+        assert "--resume" in first_cmd
+        assert "--resume" not in second_cmd
+        # Conv file should now have the new session ID
+        data = json.loads(conv_path.read_text())
+        assert data["session_id"] == "new-session"
+
+    def test_stale_session_no_conv_path_no_retry(self, tmp_path):
+        """Without a conversation_path, stale session error is not retried."""
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "No conversation found with session ID: stale-session"
+
+        backend = CliBackend()
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result) as mock_run:
+            result = backend.invoke("prompt", str(tmp_path))
+
+        # Should return empty output (no retry since no conversation_path)
+        assert result.output == ""
+        assert mock_run.call_count == 1
+
 
 class TestCliBackendIsAvailable:
     def test_available_on_success(self):
