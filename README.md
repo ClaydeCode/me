@@ -143,7 +143,7 @@ Clayde will start its loop, checking for assigned issues every 5 minutes (config
 
 | Key | Purpose |
 |---|---|
-| `CLAYDE_GITHUB_TOKEN` | Fine-grained PAT (Issues R/W, PRs R/W, Contents R/W) |
+| `CLAYDE_GITHUB_TOKEN` | Classic PAT with full `repo` scope |
 | `CLAYDE_GITHUB_USERNAME` | The bot account username |
 | `CLAYDE_GIT_NAME` | Git commit author name (defaults to `CLAYDE_GITHUB_USERNAME` if not set) |
 | `CLAYDE_GIT_EMAIL` | Git commit author email (required) |
