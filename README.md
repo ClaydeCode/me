@@ -144,9 +144,59 @@ Clayde will start its loop, checking for assigned issues every 5 minutes (config
 | Key | Purpose |
 |---|---|
 | `CLAYDE_GITHUB_TOKEN` | Fine-grained PAT (Issues R/W, PRs R/W, Contents R/W) |
-| `CLAYDE_GITHUB_USERNAME` | `ClaydeCode` |
+| `CLAYDE_GITHUB_USERNAME` | The bot account username |
+| `CLAYDE_GIT_NAME` | Git commit author name (defaults to `CLAYDE_GITHUB_USERNAME` if not set) |
+| `CLAYDE_GIT_EMAIL` | Git commit author email (required) |
 | `CLAYDE_ENABLED` | Set to `true` to activate |
 | `CLAYDE_WHITELISTED_USERS` | Comma-separated trusted GitHub usernames |
 | `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` |
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
+
+---
+
+## Deploying Your Own Instance
+
+Clayde is designed to be deployed by anyone. To run your own instance:
+
+### 1. Create a dedicated bot GitHub account
+
+Create a GitHub account for your bot (e.g. `my-bot`). This is the account that will be assigned issues and open pull requests.
+
+### 2. Create a GitHub Personal Access Token for the bot
+
+From the bot account, create a fine-grained PAT with the following repository permissions:
+- **Issues**: Read and Write
+- **Pull requests**: Read and Write
+- **Contents**: Read and Write
+
+### 3. Configure the instance
+
+```bash
+mkdir -p data/logs data/repos
+cp config.env.template data/config.env
+```
+
+Edit `data/config.env`:
+
+```
+CLAYDE_GITHUB_TOKEN=github_pat_...
+CLAYDE_GITHUB_USERNAME=my-bot
+CLAYDE_GIT_EMAIL=my-bot@example.com
+CLAYDE_ENABLED=true
+CLAYDE_WHITELISTED_USERS=your-username,my-bot
+```
+
+### 4. Choose a Claude backend and start
+
+Follow the backend instructions in the [Setup](#setup) section above, then run:
+
+```bash
+docker compose up -d
+```
+
+### 5. Assign issues to your bot
+
+In any repository the bot has access to, assign issues to the bot account. Clayde will pick them up automatically on the next loop cycle.
+
+> **Migration note:** If you previously deployed an older version of Clayde with hardcoded identity values (`ClaydeCode`, `max-tet`, `clayde@vtettenborn.net`), you must now set `CLAYDE_GITHUB_USERNAME`, `CLAYDE_GIT_EMAIL`, and `CLAYDE_WHITELISTED_USERS` explicitly in `data/config.env`.
