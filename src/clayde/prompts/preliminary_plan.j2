@@ -17,11 +17,19 @@ Pay special attention to agents.md files throughout.
 Then produce a SHORT preliminary plan that includes:
 - A brief overview of your approach (a few paragraphs, NOT an exhaustive plan)
 - Any clarifying questions you have
-- A rough scope estimate (small / medium / large)
 
 HARD LIMIT: 200 words or fewer. This is just a preliminary overview for
-discussion, not the full implementation plan. That comes later after approval.
+discussion, not the full implementation plan. That comes later after approval
+(for large issues).
+
+Also determine:
+- `size`: Classify the issue as `small` (roughly 1–5 files, mechanical or
+  well-scoped changes, no architectural decisions) or `large` (broader scope,
+  multiple components, significant design choices). When in doubt, prefer `large`.
+- `branch_name`: Choose a branch name in the format
+  `clayde/issue-{{ number }}-<slug>` where `<slug>` is a 1-to-3 word lowercase
+  hyphenated description (e.g. `clayde/issue-{{ number }}-better-branch-naming`).
 
 Output ONLY a JSON object with the following structure. No preamble, no markdown wrapping.
 
-{"plan": "<preliminary plan text in markdown>"}
+{"plan": "<preliminary plan text in markdown>", "size": "small|large", "branch_name": "clayde/issue-{{ number }}-<slug>"}

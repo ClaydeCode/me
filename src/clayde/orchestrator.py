@@ -108,8 +108,18 @@ def _handle_awaiting_approval(g: Github, url: str, issue_state: dict, *, phase: 
     """
     comment_id_key = "preliminary_comment_id" if phase == "preliminary" else "plan_comment_id"
     update_phase = phase
-    next_task = plan.run_thorough if phase == "preliminary" else implement.run
-    next_task_label = "thorough_plan" if phase == "preliminary" else "implement"
+    if phase == "preliminary":
+        # Small issues skip thorough planning and go straight to implementation.
+        size = issue_state.get("size", "large")
+        if size == "small":
+            next_task = implement.run
+            next_task_label = "implement"
+        else:
+            next_task = plan.run_thorough
+            next_task_label = "thorough_plan"
+    else:
+        next_task = implement.run
+        next_task_label = "implement"
 
     tracer = get_tracer()
     with tracer.start_as_current_span(f"clayde.handle_awaiting_{phase}_approval", attributes={"issue.url": url}) as span:
