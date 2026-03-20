@@ -8,34 +8,53 @@ from clayde.responses import (
     PreliminaryPlanResponse,
     ThoroughPlanResponse,
     UpdatePlanResponse,
-    _strip_code_fences,
+    _extract_json,
     parse_response,
 )
 
 
-class TestStripCodeFences:
+class TestExtractJson:
     def test_strips_json_fences(self):
         text = "```json\n{\"plan\": \"hello\"}\n```"
-        assert _strip_code_fences(text) == '{"plan": "hello"}'
+        assert _extract_json(text) == '{"plan": "hello"}'
 
     def test_strips_plain_fences(self):
         text = "```\n{\"plan\": \"hello\"}\n```"
-        assert _strip_code_fences(text) == '{"plan": "hello"}'
+        assert _extract_json(text) == '{"plan": "hello"}'
 
     def test_no_fences_unchanged(self):
         text = '{"plan": "hello"}'
-        assert _strip_code_fences(text) == text
+        assert _extract_json(text) == text
 
     def test_strips_surrounding_whitespace(self):
         text = '  {"plan": "hello"}  '
-        assert _strip_code_fences(text) == '{"plan": "hello"}'
+        assert _extract_json(text) == '{"plan": "hello"}'
 
     def test_partial_fence_unchanged(self):
         # Only opening fence — should not strip
         text = "```json\n{\"plan\": \"hello\"}"
-        result = _strip_code_fences(text)
-        # no closing fence so it stays as-is (stripped)
+        result = _extract_json(text)
+        # no closing fence so brace-matching finds the JSON object
         assert "plan" in result
+
+    def test_extracts_json_with_preamble(self):
+        text = 'Here is my plan.\n\n```json\n{"plan": "hello"}\n```'
+        assert _extract_json(text) == '{"plan": "hello"}'
+
+    def test_extracts_json_object_without_fences(self):
+        text = 'Now I have enough context.\n\n{"plan": "hello"}'
+        assert _extract_json(text) == '{"plan": "hello"}'
+
+    def test_handles_nested_braces_in_json(self):
+        text = 'Some text\n{"plan": "use {braces} here"}'
+        result = _extract_json(text)
+        assert '"plan"' in result
+        assert "{braces}" in result
+
+    def test_handles_escaped_quotes(self):
+        text = r'Preamble {"plan": "say \"hello\""}'
+        result = _extract_json(text)
+        assert '"plan"' in result
 
 
 class TestParseResponse:

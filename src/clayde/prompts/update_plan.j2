@@ -33,6 +33,8 @@ Also produce the complete updated plan (copy unchanged sections verbatim —
 do not rephrase, reformat, or restructure parts of the plan that are not
 affected by the new comments. Only modify what is necessary).
 
-Output ONLY a JSON object with the following structure. No preamble, no markdown wrapping.
+IMPORTANT: Your final response must be ONLY a raw JSON object — nothing else.
+Do not include any text before or after the JSON. Do not wrap it in markdown code fences.
+Your entire response must be parseable by json.loads().
 
 {"summary": "<short summary of what changed and responses to questions>", "updated_plan": "<complete updated plan in markdown>"}
