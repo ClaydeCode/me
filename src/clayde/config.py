@@ -20,12 +20,18 @@ class Settings(BaseSettings):
     )
 
     github_token: str = ""
-    github_username: str = "ClaydeCode"
+    github_username: str = ""
     enabled: bool = False
-    whitelisted_users: str = "max-tet,ClaydeCode"
+    whitelisted_users: str = ""
     claude_api_key: str = ""
     claude_model: str = "claude-opus-4-6"
     claude_backend: str = "api"  # "api" or "cli"
+    git_name: str = ""
+    git_email: str = ""
+
+    @property
+    def effective_git_name(self) -> str:
+        return self.git_name or self.github_username
 
     # Claude invocation tuning
     claude_tool_loop_timeout_s: int = 1800

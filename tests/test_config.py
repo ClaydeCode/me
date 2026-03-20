@@ -22,11 +22,24 @@ class TestSettings:
         monkeypatch.delenv("CLAYDE_GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("CLAYDE_ENABLED", raising=False)
         monkeypatch.delenv("CLAYDE_WHITELISTED_USERS", raising=False)
+        monkeypatch.delenv("CLAYDE_GITHUB_USERNAME", raising=False)
         s = Settings(_env_file=None)
         assert s.github_token == ""
         assert s.enabled is False
-        assert s.github_username == "ClaydeCode"
-        assert s.whitelisted_users_list == ["max-tet", "ClaydeCode"]
+        assert s.github_username == ""
+        assert s.whitelisted_users_list == []
+
+    def test_effective_git_name_falls_back_to_username(self, monkeypatch):
+        monkeypatch.setenv("CLAYDE_GITHUB_USERNAME", "my-bot")
+        monkeypatch.delenv("CLAYDE_GIT_NAME", raising=False)
+        s = Settings(_env_file=None)
+        assert s.effective_git_name == "my-bot"
+
+    def test_effective_git_name_uses_explicit_value(self, monkeypatch):
+        monkeypatch.setenv("CLAYDE_GITHUB_USERNAME", "my-bot")
+        monkeypatch.setenv("CLAYDE_GIT_NAME", "My Bot")
+        s = Settings(_env_file=None)
+        assert s.effective_git_name == "My Bot"
 
     def test_loads_from_env_file(self, tmp_path, monkeypatch):
         env_file = tmp_path / "config.env"

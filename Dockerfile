@@ -37,14 +37,16 @@ COPY src/ src/
 COPY CLAUDE.md ./
 RUN uv sync --frozen --no-dev
 
+# Copy entrypoint script
+COPY entrypoint.sh /opt/clayde/entrypoint.sh
+RUN chmod +x /opt/clayde/entrypoint.sh
+
 # Create data directories and set ownership
 RUN mkdir -p /data/repos /data/logs && chown -R clayde:clayde /data
 
-# Switch to non-root user and configure git
+# Switch to non-root user and configure git credential helper
 USER clayde
 RUN mkdir -p /home/clayde/.claude && \
-    git config --global credential.helper '!gh auth git-credential' && \
-    git config --global user.name "Clayde" && \
-    git config --global user.email "clayde@vtettenborn.net"
+    git config --global credential.helper '!gh auth git-credential'
 
-ENTRYPOINT ["/opt/clayde/.venv/bin/clayde"]
+ENTRYPOINT ["/opt/clayde/entrypoint.sh"]

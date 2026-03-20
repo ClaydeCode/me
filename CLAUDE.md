@@ -1,12 +1,8 @@
 # Clayde
 
-**Name:** Clayde
-**Email:** clayde@vtettenborn.net
-**GitHub:** @ClaydeCode
+Clayde is a persistent autonomous AI software agent running in a Docker container. My purpose is to help with software development by working on GitHub issues assigned to me. When assigned an issue, I analyze the relevant codebase, implement a solution, open a pull request, and post a comment on the issue summarizing what I did.
 
-Clayde is a persistent autonomous AI software agent running on a dedicated VM at `/home/ubuntu/clayde`. My purpose is to help with software development by working on GitHub issues assigned to me. When assigned an issue, I analyze the relevant codebase, implement a solution, open a pull request, and post a comment on the issue summarizing what I did.
-
-The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name and email.
+The `gh` CLI is authenticated as the configured bot GitHub account and git is configured with the identity from `CLAYDE_GIT_NAME` and `CLAYDE_GIT_EMAIL`.
 
 ---
 
@@ -27,7 +23,7 @@ The `gh` CLI is authenticated as @ClaydeCode and git is configured with my name 
 - **Container layout:** Application code at `/opt/clayde`, data at `/data` (single volume mount from host `./data`)
 - **Claude:** Dual backend — Anthropic Python SDK (`api`) or Claude Code CLI (`cli`), selected by `CLAYDE_CLAUDE_BACKEND`
 - **Git credential helper:** `gh auth git-credential` (configured globally in the container)
-- **Git identity:** `user.name = Clayde`, `user.email = clayde@vtettenborn.net`
+- **Git identity:** configured at container startup from `CLAYDE_GIT_NAME` and `CLAYDE_GIT_EMAIL` env vars
 
 ---
 
@@ -39,7 +35,6 @@ pyproject.toml          # hatchling build; console scripts: clayde, clayde-once
 CLAUDE.md               # this file — identity + project context
 Dockerfile              # Python 3.13-slim image with git, gh, uv
 docker-compose.yml      # container deployment config
-gh-issue.md             # slash-command prompt for interactive issue work
 uv.lock
 src/clayde/
   __init__.py
@@ -99,10 +94,12 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 
 | Key | Purpose |
 |-----|---------|
-| `CLAYDE_GITHUB_TOKEN` | Fine-grained PAT with Issues R/W, Pull Requests R/W, Contents R/W |
-| `CLAYDE_GITHUB_USERNAME` | `ClaydeCode` |
+| `CLAYDE_GITHUB_TOKEN` | Classic PAT with full `repo` scope |
+| `CLAYDE_GITHUB_USERNAME` | The bot account username (e.g. `YourBotName`) |
 | `CLAYDE_ENABLED` | Set to `true` to activate; any other value causes immediate exit |
-| `CLAYDE_WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames (e.g. `max-tet,ClaydeCode`) |
+| `CLAYDE_WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames |
+| `CLAYDE_GIT_NAME` | Git commit author name (defaults to `CLAYDE_GITHUB_USERNAME` if not set) |
+| `CLAYDE_GIT_EMAIL` | Git commit author email (required) |
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key for Claude SDK calls (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
 | `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` — selects Anthropic SDK or Claude Code CLI |
@@ -287,16 +284,6 @@ Handles PR review comments after implementation:
 Format: `[YYYY-MM-DD HH:MM:SS] [clayde.<module>] <message>`
 File: `/data/logs/agent.log` (appended)
 Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.tasks.review`, `clayde.github`, `clayde.claude`
-
----
-
-## Interactive Issue Work (`gh-issue.md`)
-
-The file `gh-issue.md` is a Claude Code slash-command prompt (`/gh-issue <number>`) for working on issues interactively (outside cron). It runs as a multi-step subagent workflow: Plan → clarify → implement → self-review → address review → return PR URL. Sends push notifications via `apprise ntfy://7yuau0vyes`.
-
-Allowed tools for interactive work: `Bash(gh:*)`, `Bash(git:*)`, `Bash(just:*)`, `Bash(python:*)`, `Bash(pytest:*)`, `Bash(npm:*)`, `Bash(uv:*)`, `Bash(apprise:*)`, `Read`, `Write`, `Edit`, `Glob`, `Grep`
-
-Branch naming for interactive work: `issue/{number}-short-desc`
 
 ---
 
