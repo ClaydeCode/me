@@ -28,16 +28,11 @@ Based on the new comments:
 2. Answer any questions directed at you
 3. Incorporate any requested changes or clarifications
 
-Produce two outputs separated by the marker `---UPDATED_PLAN---`:
+Produce a short summary of what changed and your responses to any questions.
+Also produce the complete updated plan (copy unchanged sections verbatim —
+do not rephrase, reformat, or restructure parts of the plan that are not
+affected by the new comments. Only modify what is necessary).
 
-FIRST: A short summary of what changed and your responses to any questions.
-This will be posted as a new comment.
+Output ONLY a JSON object with the following structure. No preamble, no markdown wrapping.
 
----UPDATED_PLAN---
-
-SECOND: The complete updated plan. This will replace the existing plan comment.
-IMPORTANT: Make minimal changes. Copy unchanged sections verbatim — do not
-rephrase, reformat, or restructure parts of the plan that are not affected by
-the new comments. Only modify what is necessary.
-
-Output ONLY these two sections. No preamble, no wrapping.
+{"summary": "<short summary of what changed and responses to questions>", "updated_plan": "<complete updated plan in markdown>"}

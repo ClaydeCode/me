@@ -23,6 +23,8 @@ Steps:
 6. Push: git push origin {{ branch_name }}
 
 After making all changes, provide a short summary of what you changed in response
-to each review comment. This will be posted as a comment on the issue.
+to each review comment.
 
-Output ONLY the summary in markdown format. No preamble, no wrapping.
+Output ONLY a JSON object with the following structure. No preamble, no markdown wrapping.
+
+{"summary": "<short summary of changes made in response to review comments>"}

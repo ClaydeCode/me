@@ -50,7 +50,7 @@ src/clayde/
   github.py             # PyGitHub wrappers: parse_issue_url(), fetch_issue(),
                         #   fetch_issue_comments(), post_comment(), edit_comment(),
                         #   fetch_comment(), get_default_branch(),
-                        #   get_assigned_issues(), extract_branch_name(),
+                        #   get_assigned_issues(),
                         #   find_open_pr(), create_pull_request(), is_blocked(),
                         #   add_pr_reviewer(), get_pr_reviews(),
                         #   get_pr_review_comments(), parse_pr_url(),
@@ -59,6 +59,7 @@ src/clayde/
   safety.py             # Content filtering & plan approval: is_comment_visible(),
                         #   filter_comments(), is_issue_visible(),
                         #   has_visible_content(), is_plan_approved()
+  responses.py          # Pydantic response models + parse_response() for structured JSON
   claude.py             # invoke_claude(prompt, repo_path) — dual backend:
                         #   ApiBackend (Anthropic SDK tool-use loop) or
                         #   CliBackend (Claude Code CLI subprocess)

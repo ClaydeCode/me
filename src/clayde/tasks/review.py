@@ -16,6 +16,7 @@ from clayde.github import (
     parse_pr_url,
     post_comment,
 )
+from clayde.responses import AddressReviewResponse, parse_response
 from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
@@ -121,13 +122,22 @@ def run(issue_url: str) -> None:
             })
             return
 
-        output = result.output
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
 
+        # Parse JSON response to extract summary
+        summary = None
+        try:
+            parsed = parse_response(result.output, AddressReviewResponse)
+            summary = parsed.summary
+        except ValueError as e:
+            log.warning("[%s] Failed to parse address_review response JSON: %s", issue_label, e)
+            # Fall back to raw output
+            summary = result.output.strip() if result.output else None
+
         # Post summary comment on the issue
-        if output and output.strip():
+        if summary:
             post_comment(g, owner, repo, number,
-                         f"**Review addressed.** {output.strip()}{format_cost_line(total_cost)}")
+                         f"**Review addressed.** {summary}{format_cost_line(total_cost)}")
 
         # Update last seen review ID and return to pr_open
         max_review_id = max(r.id for r in new_reviews)

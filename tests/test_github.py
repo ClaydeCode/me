@@ -10,7 +10,6 @@ from clayde.github import (
     add_pr_reviewer,
     create_pull_request,
     edit_comment,
-    extract_branch_name,
     fetch_comment,
     fetch_issue,
     fetch_issue_comments,
@@ -124,20 +123,6 @@ class TestGetAssignedIssues:
         g.get_user.return_value.get_issues.side_effect = GithubException(500, "error", None)
         result = get_assigned_issues(g)
         assert result == []
-
-
-class TestExtractBranchName:
-    def test_extracts_from_plan(self):
-        plan = "Some plan text\n\n**Branch:** `clayde/issue-13-better-branch`\n"
-        assert extract_branch_name(plan, 13) == "clayde/issue-13-better-branch"
-
-    def test_fallback_when_missing(self):
-        plan = "Some plan text without branch name"
-        assert extract_branch_name(plan, 7) == "clayde/issue-7"
-
-    def test_extracts_with_surrounding_text(self):
-        plan = "Plan\n**Branch:** `clayde/issue-5-fix-bug`\nMore text"
-        assert extract_branch_name(plan, 5) == "clayde/issue-5-fix-bug"
 
 
 class TestFindOpenPr:
