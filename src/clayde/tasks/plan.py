@@ -25,13 +25,17 @@ from clayde.github import (
     post_comment,
 )
 from clayde.prompts import collect_comments_after, render_template
+from clayde.responses import (
+    PreliminaryPlanResponse,
+    ThoroughPlanResponse,
+    UpdatePlanResponse,
+    parse_response,
+)
 from clayde.safety import filter_comments, get_new_visible_comments, is_issue_visible
 from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
 
 log = logging.getLogger("clayde.tasks.plan")
-
-_UPDATE_PLAN_SEPARATOR = "---UPDATED_PLAN---"
 
 
 # ---------------------------------------------------------------------------
@@ -71,15 +75,25 @@ def run_preliminary(issue_url: str) -> None:
             })
             return
 
-        plan_text = result.output
+        raw_output = result.output
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
-        span.set_attribute("plan.output_length", len(plan_text))
+        span.set_attribute("plan.output_length", len(raw_output))
 
-        if not plan_text.strip():
+        if not raw_output.strip():
             log.error("Claude returned empty preliminary plan for #%d: %s", number, issue.title)
             span.set_attribute("plan.status", "empty")
             update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
+
+        try:
+            parsed = parse_response(raw_output, PreliminaryPlanResponse)
+        except ValueError as e:
+            log.error("Failed to parse preliminary plan response for #%d: %s: %s", number, issue.title, e)
+            span.set_attribute("plan.status", "parse_error")
+            update_issue_state(issue_url, {"status": IssueStatus.FAILED})
+            return
+
+        plan_text = parsed.plan
 
         if len(plan_text.strip()) < 100:
             log.warning("Claude returned very short preliminary plan for #%d: %s (%d chars)",
@@ -153,15 +167,26 @@ def run_thorough(issue_url: str) -> None:
             })
             return
 
-        plan_text = result.output
+        raw_output = result.output
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
-        span.set_attribute("plan.output_length", len(plan_text))
+        span.set_attribute("plan.output_length", len(raw_output))
 
-        if not plan_text.strip():
+        if not raw_output.strip():
             log.error("Claude returned empty thorough plan for #%d: %s", number, issue.title)
             span.set_attribute("plan.status", "empty")
             update_issue_state(issue_url, {"status": IssueStatus.FAILED})
             return
+
+        try:
+            parsed = parse_response(raw_output, ThoroughPlanResponse)
+        except ValueError as e:
+            log.error("Failed to parse thorough plan response for #%d: %s: %s", number, issue.title, e)
+            span.set_attribute("plan.status", "parse_error")
+            update_issue_state(issue_url, {"status": IssueStatus.FAILED})
+            return
+
+        plan_text = parsed.plan
+        branch_name = parsed.branch_name
 
         if len(plan_text.strip()) < 200:
             log.warning("Claude returned very short thorough plan for #%d: %s (%d chars)",
@@ -183,6 +208,7 @@ def run_thorough(issue_url: str) -> None:
             "status": IssueStatus.AWAITING_PLAN_APPROVAL,
             "plan_comment_id": comment_id,
             "last_seen_comment_id": last_comment_id,
+            "branch_name": branch_name,
         })
         span.set_attribute("plan.status", "posted")
         log.info("[%s: %s] Thorough plan posted (comment %s)", issue_ref(owner, repo, number), issue.title, comment_id)
@@ -262,8 +288,19 @@ def run_update(issue_url: str, phase: str) -> None:
 
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
 
-        # Parse output into summary + updated plan
-        summary, updated_plan = _parse_update_output(result.output)
+        # Parse JSON output into summary + updated plan
+        try:
+            parsed = parse_response(result.output, UpdatePlanResponse)
+            summary = parsed.summary
+            updated_plan = parsed.updated_plan
+        except ValueError as e:
+            log.error("[%s: %s] Failed to parse update plan response: %s", issue_ref(owner, repo, number), issue.title, e)
+            span.set_attribute("plan.update_status", "parse_error")
+            update_issue_state(issue_url, {
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING if phase == "preliminary" else IssueStatus.PLANNING,
+            })
+            return
 
         if updated_plan:
             # Edit the existing plan comment
@@ -385,22 +422,3 @@ def _post_thorough_plan_comment(g, owner: str, repo: str, number: int, plan_text
     return post_comment(g, owner, repo, number, comment_body)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _parse_update_output(output: str) -> tuple[str, str]:
-    """Parse Claude output into (summary, updated_plan).
-
-    Expected format:
-        <summary text>
-        ---UPDATED_PLAN---
-        <full updated plan>
-
-    Returns (summary, updated_plan). If separator not found, treats entire
-    output as summary with empty updated_plan.
-    """
-    if _UPDATE_PLAN_SEPARATOR in output:
-        parts = output.split(_UPDATE_PLAN_SEPARATOR, 1)
-        return parts[0].strip(), parts[1].strip()
-    return output.strip(), ""

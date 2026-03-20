@@ -65,14 +65,6 @@ def get_assigned_issues(g: Github) -> list:
         return []
 
 
-def extract_branch_name(plan_text: str, number: int) -> str:
-    """Extract branch name from plan text, falling back to clayde/issue-{number}."""
-    m = re.search(r"\*\*Branch:\*\*\s*`(clayde/issue-\d+-[a-z0-9-]+)`", plan_text)
-    if m:
-        return m.group(1)
-    return f"clayde/issue-{number}"
-
-
 def find_open_pr(g: Github, owner: str, repo: str, branch_name: str) -> str | None:
     """Return the HTML URL of an open PR for the given branch, or None."""
     pulls = list(_get_repo(g, owner, repo).get_pulls(

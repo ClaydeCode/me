@@ -28,21 +28,19 @@ The plan should include:
 - Edge cases and risks
 - How to verify the implementation is correct
 
-HARD LIMIT: The plan must be 500 words or fewer (excluding the branch name line).
+HARD LIMIT: The plan must be 500 words or fewer (excluding the branch name).
 Do NOT include code snippets, exact code changes, step-by-step implementation
 instructions, or line-by-line diffs. The implementing model will read the codebase
 itself — your job is to describe the desired outcome clearly, not to dictate the
 implementation.
 
-At the end of your plan, include a branch name suggestion on its own line in
-exactly this format:
-
-**Branch:** `clayde/issue-{{ number }}-<slug>`
-
-where `<slug>` is a 1-to-3 word lowercase hyphenated description of the issue
-(e.g., `clayde/issue-13-better-branch-naming`). This MUST be present.
-
 If anything is ambiguous or you need clarification, include your questions
-at the end under a "Questions" section (before the branch name line).
+at the end under a "Questions" section.
 
-Output ONLY the plan in markdown format. No preamble, no wrapping.
+The branch name must be `clayde/issue-{{ number }}-<slug>` where `<slug>` is a
+1-to-3 word lowercase hyphenated description of the issue
+(e.g., `clayde/issue-13-better-branch-naming`).
+
+Output ONLY a JSON object with the following structure. No preamble, no markdown wrapping.
+
+{"plan": "<implementation plan in markdown>", "branch_name": "clayde/issue-{{ number }}-<slug>"}

@@ -15,7 +15,6 @@ from clayde.prompts import collect_comments_after, render_template
 from clayde.github import (
     add_pr_reviewer,
     create_pull_request,
-    extract_branch_name,
     fetch_comment,
     fetch_issue,
     fetch_issue_comments,
@@ -28,6 +27,7 @@ from clayde.github import (
     parse_pr_url,
     post_comment,
 )
+from clayde.responses import ImplementResponse, parse_response
 from clayde.safety import filter_comments
 from clayde.state import IssueStatus, accumulate_cost, get_issue_state, pop_accumulated_cost, update_issue_state
 from clayde.telemetry import get_tracer
@@ -87,8 +87,17 @@ def run(issue_url: str) -> None:
             return
 
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
+
+        # Parse JSON response to extract summary
+        summary = None
+        try:
+            parsed = parse_response(result.output, ImplementResponse)
+            summary = parsed.summary
+        except ValueError as e:
+            log.warning("[%s: %s] Failed to parse implement response JSON: %s", issue_ref(owner, repo, number), issue.title, e)
+
         pr_url = _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue,
-                                     repo_path=repo_path)
+                                     repo_path=repo_path, summary=summary)
 
         if pr_url:
             _assign_reviewer_and_finish(g, owner, repo, number, issue_url, pr_url, span, cost_eur=total_cost)
@@ -127,7 +136,7 @@ def _prepare_implementation_context(g, owner, repo, number, issue_url, issue_sta
     plan_comment = fetch_comment(g, owner, repo, number, plan_comment_id)
     plan_text = plan_comment.body
 
-    branch_name = issue_state.get("branch_name") or extract_branch_name(plan_text, number)
+    branch_name = issue_state.get("branch_name") or f"clayde/issue-{number}"
     update_issue_state(issue_url, {"branch_name": branch_name})
 
     if resumed:
@@ -177,7 +186,7 @@ def _ensure_branch_pushed(repo_path: Path, branch_name: str) -> bool:
 
 
 def _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, total_cost, issue,
-                       repo_path: Path | None = None) -> str | None:
+                       repo_path: Path | None = None, summary: str | None = None) -> str | None:
     """Return the PR URL for branch_name, creating it if necessary."""
     pr_url = find_open_pr(g, owner, repo, branch_name)
     if pr_url:
@@ -188,10 +197,14 @@ def _find_or_create_pr(g, owner, repo, number, branch_name, default_branch, tota
         return None
 
     try:
+        if summary:
+            pr_body = f"Closes #{number}\n\n{summary}{format_cost_line(total_cost)}"
+        else:
+            pr_body = f"Closes #{number}{format_cost_line(total_cost)}"
         pr_url = create_pull_request(
             g, owner, repo,
             title=f"Fix #{number}: {issue.title}",
-            body=f"Closes #{number}{format_cost_line(total_cost)}",
+            body=pr_body,
             head=branch_name,
             base=default_branch,
         )

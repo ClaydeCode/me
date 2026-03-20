@@ -8,7 +8,6 @@ from clayde.tasks.plan import (
     _build_preliminary_prompt,
     _build_thorough_prompt,
     _build_update_prompt,
-    _parse_update_output,
     _post_preliminary_comment,
     _post_thorough_plan_comment,
     run_preliminary,
@@ -127,7 +126,8 @@ class TestBuildUpdatePrompt:
         )
         assert "current plan text" in prompt
         assert "new comment text" in prompt
-        assert "UPDATED_PLAN" in prompt
+        assert "summary" in prompt.lower()
+        assert "updated_plan" in prompt
 
     def test_preliminary_phase_warns_against_escalation(self):
         prompt = _build_update_prompt(
@@ -223,25 +223,6 @@ class TestCollectDiscussionAfter:
         assert result == "(none)"
 
 
-class TestParseUpdateOutput:
-    def test_parses_with_separator(self):
-        output = "Here is the summary\n---UPDATED_PLAN---\nHere is the updated plan"
-        summary, plan = _parse_update_output(output)
-        assert summary == "Here is the summary"
-        assert plan == "Here is the updated plan"
-
-    def test_no_separator_returns_all_as_summary(self):
-        output = "Just a summary with no updated plan"
-        summary, plan = _parse_update_output(output)
-        assert summary == output
-        assert plan == ""
-
-    def test_empty_output(self):
-        summary, plan = _parse_update_output("")
-        assert summary == ""
-        assert plan == ""
-
-
 class TestRunPreliminary:
     def test_full_success(self):
         mock_comment = MagicMock()
@@ -257,7 +238,7 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("x" * 150, cost_eur=1.00)), \
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result('{"plan": "' + "x" * 150 + '"}', cost_eur=1.00)), \
              patch("clayde.tasks.plan._post_preliminary_comment", return_value=999) as mock_post, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
              patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
@@ -285,6 +266,22 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
              patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("  ")), \
+             patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
+            run_preliminary("url")
+
+        last_call = mock_update.call_args_list[-1]
+        # Empty output → failed
+        assert last_call[0][1]["status"] == "failed"
+
+    def test_invalid_json_sets_failed(self):
+        with patch("clayde.tasks.plan.get_github_client"), \
+             patch("clayde.tasks.plan.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.plan.update_issue_state") as mock_update, \
+             patch("clayde.tasks.plan.fetch_issue"), \
+             patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("not valid json at all")), \
              patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
             run_preliminary("url")
 
@@ -320,7 +317,7 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("x" * 150, cost_eur=1.00)), \
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result('{"plan": "' + "x" * 150 + '"}', cost_eur=1.00)), \
              patch("clayde.tasks.plan._post_preliminary_comment", return_value=999) as mock_post, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
              patch("clayde.tasks.plan.pop_accumulated_cost", return_value=2.00):
@@ -346,7 +343,8 @@ class TestRunThorough:
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
              patch("clayde.tasks.plan.filter_comments", return_value=[]), \
              patch("clayde.tasks.plan._build_thorough_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result("x" * 250, cost_eur=2.00)), \
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result(
+                 '{"plan": "' + "x" * 250 + '", "branch_name": "clayde/issue-1-fix"}', cost_eur=2.00)), \
              patch("clayde.tasks.plan._post_thorough_plan_comment", return_value=888) as mock_post, \
              patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
             mock_fc.return_value.body = "preliminary plan"
@@ -358,6 +356,7 @@ class TestRunThorough:
         last = calls[-1][0][1]
         assert last["status"] == "awaiting_plan_approval"
         assert last["plan_comment_id"] == 888
+        assert last["branch_name"] == "clayde/issue-1-fix"
         # Cost is passed
         assert mock_post.call_args[0][5] == 2.00
 
@@ -411,7 +410,7 @@ class TestRunUpdate:
              patch("clayde.tasks.plan.get_new_visible_comments", return_value=[new_comment]), \
              patch("clayde.tasks.plan.is_issue_visible", return_value=True), \
              patch("clayde.tasks.plan.invoke_claude",
-                   return_value=_make_result("Summary\n---UPDATED_PLAN---\nUpdated plan text", cost_eur=0.80)), \
+                   return_value=_make_result('{"summary": "Summary", "updated_plan": "Updated plan text"}', cost_eur=0.80)), \
              patch("clayde.tasks.plan.edit_comment") as mock_edit, \
              patch("clayde.tasks.plan.post_comment") as mock_post, \
              patch("clayde.tasks.plan.update_issue_state") as mock_update, \
