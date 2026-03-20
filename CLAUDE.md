@@ -95,7 +95,7 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 
 | Key | Purpose |
 |-----|---------|
-| `CLAYDE_GITHUB_TOKEN` | Fine-grained PAT with Issues R/W, Pull Requests R/W, Contents R/W |
+| `CLAYDE_GITHUB_TOKEN` | Classic PAT with full `repo` scope |
 | `CLAYDE_GITHUB_USERNAME` | The bot account username (e.g. `YourBotName`) |
 | `CLAYDE_ENABLED` | Set to `true` to activate; any other value causes immediate exit |
 | `CLAYDE_WHITELISTED_USERS` | Comma-separated list of trusted GitHub usernames |
@@ -285,16 +285,6 @@ Handles PR review comments after implementation:
 Format: `[YYYY-MM-DD HH:MM:SS] [clayde.<module>] <message>`
 File: `/data/logs/agent.log` (appended)
 Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.tasks.review`, `clayde.github`, `clayde.claude`
-
----
-
-## Interactive Issue Work (`gh-issue.md`)
-
-The file `gh-issue.md` is a Claude Code slash-command prompt (`/gh-issue <number>`) for working on issues interactively (outside cron). It runs as a multi-step subagent workflow: Plan → clarify → implement → self-review → address review → return PR URL.
-
-Allowed tools for interactive work: `Bash(gh:*)`, `Bash(git:*)`, `Bash(just:*)`, `Bash(python:*)`, `Bash(pytest:*)`, `Bash(npm:*)`, `Bash(uv:*)`, `Read`, `Write`, `Edit`, `Glob`, `Grep`
-
-Branch naming for interactive work: `issue/{number}-short-desc`
 
 ---
 

@@ -165,10 +165,7 @@ Create a GitHub account for your bot (e.g. `my-bot`). This is the account that w
 
 ### 2. Create a GitHub Personal Access Token for the bot
 
-From the bot account, create a fine-grained PAT with the following repository permissions:
-- **Issues**: Read and Write
-- **Pull requests**: Read and Write
-- **Contents**: Read and Write
+From the bot account, create a classic personal access token with the full **`repo`** scope.
 
 ### 3. Configure the instance
 
@@ -199,4 +196,3 @@ docker compose up -d
 
 In any repository the bot has access to, assign issues to the bot account. Clayde will pick them up automatically on the next loop cycle.
 
-> **Migration note:** If you previously deployed an older version of Clayde with hardcoded identity values (`ClaydeCode`, `max-tet`, `clayde@vtettenborn.net`), you must now set `CLAYDE_GITHUB_USERNAME`, `CLAYDE_GIT_EMAIL`, and `CLAYDE_WHITELISTED_USERS` explicitly in `data/config.env`.
