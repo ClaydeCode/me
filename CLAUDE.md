@@ -35,7 +35,6 @@ pyproject.toml          # hatchling build; console scripts: clayde, clayde-once
 CLAUDE.md               # this file — identity + project context
 Dockerfile              # Python 3.13-slim image with git, gh, uv
 docker-compose.yml      # container deployment config
-gh-issue.md             # slash-command prompt for interactive issue work
 uv.lock
 src/clayde/
   __init__.py
