@@ -25,6 +25,8 @@ Steps:
 After making all changes, provide a short summary of what you changed in response
 to each review comment.
 
-Output ONLY a JSON object with the following structure. No preamble, no markdown wrapping.
+IMPORTANT: Your final response must be ONLY a raw JSON object — nothing else.
+Do not include any text before or after the JSON. Do not wrap it in markdown code fences.
+Your entire response must be parseable by json.loads().
 
 {"summary": "<short summary of changes made in response to review comments>"}

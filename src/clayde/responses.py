@@ -30,13 +30,44 @@ class AddressReviewResponse(BaseModel):
     summary: str
 
 
-def _strip_code_fences(text: str) -> str:
-    """Strip markdown code fences (```json ... ``` or ``` ... ```) from text."""
+def _extract_json(text: str) -> str:
+    """Extract a JSON object from LLM output that may contain surrounding text.
+
+    Tries in order:
+    1. Code-fenced JSON block (```json ... ``` or ``` ... ```)
+    2. First top-level { ... } object in the text
+    3. Falls back to stripped original text
+    """
     text = text.strip()
-    # Remove ```json ... ``` or ``` ... ``` fences
-    m = re.match(r"^```(?:json)?\s*\n([\s\S]*?)\n```$", text)
+    # 1. Extract from markdown code fence anywhere in the text
+    m = re.search(r"```(?:json)?\s*\n([\s\S]*?)\n```", text)
     if m:
         return m.group(1).strip()
+    # 2. Find the first top-level JSON object by matching braces
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape:
+                escape = False
+                continue
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"' and not escape:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
     return text
 
 
@@ -49,7 +80,7 @@ def parse_response(text: str, model_class: type[BaseModel]) -> BaseModel:
     Raises:
         ValueError: If the text cannot be parsed as JSON or fails validation.
     """
-    cleaned = _strip_code_fences(text)
+    cleaned = _extract_json(text)
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as e:

@@ -30,6 +30,8 @@ Also determine:
   `clayde/issue-{{ number }}-<slug>` where `<slug>` is a 1-to-3 word lowercase
   hyphenated description (e.g. `clayde/issue-{{ number }}-better-branch-naming`).
 
-Output ONLY a JSON object with the following structure. No preamble, no markdown wrapping.
+IMPORTANT: Your final response must be ONLY a raw JSON object — nothing else.
+Do not include any text before or after the JSON. Do not wrap it in markdown code fences.
+Your entire response must be parseable by json.loads().
 
 {"plan": "<preliminary plan text in markdown>", "size": "small|large", "branch_name": "clayde/issue-{{ number }}-<slug>"}
