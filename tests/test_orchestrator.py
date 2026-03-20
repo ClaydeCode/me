@@ -279,6 +279,40 @@ class TestHandleAwaitingPreliminary:
             _handle_awaiting_approval(g, "url", entry, phase="preliminary")
             mock_plan.run_update.assert_called_once_with("url", "preliminary")
 
+    def test_runs_implement_directly_when_small_and_approved(self):
+        g = MagicMock()
+        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100, "size": "small"}
+        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
+             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
+             patch("clayde.orchestrator.plan") as mock_plan, \
+             patch("clayde.orchestrator.implement") as mock_impl:
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
+            mock_plan.run_thorough.assert_not_called()
+            mock_impl.run.assert_called_once_with("url")
+
+    def test_runs_thorough_when_large_and_approved(self):
+        g = MagicMock()
+        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100, "size": "large"}
+        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
+             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
+             patch("clayde.orchestrator.plan") as mock_plan, \
+             patch("clayde.orchestrator.implement") as mock_impl:
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
+            mock_plan.run_thorough.assert_called_once_with("url")
+            mock_impl.run.assert_not_called()
+
+    def test_defaults_to_large_when_size_absent(self):
+        """In-flight issues without size in state default to large behavior."""
+        g = MagicMock()
+        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}
+        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
+             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
+             patch("clayde.orchestrator.plan") as mock_plan, \
+             patch("clayde.orchestrator.implement") as mock_impl:
+            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
+            mock_plan.run_thorough.assert_called_once_with("url")
+            mock_impl.run.assert_not_called()
+
     def test_sets_failed_on_thorough_exception(self):
         g = MagicMock()
         entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}

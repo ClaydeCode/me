@@ -148,20 +148,33 @@ class TestBuildUpdatePrompt:
 
 
 class TestPostPreliminaryComment:
-    def test_posts_formatted_comment(self):
+    def test_posts_formatted_comment_large(self):
         g = MagicMock()
         mock_comment = MagicMock()
         mock_comment.id = 555
         g.get_repo.return_value.get_issue.return_value.create_comment.return_value = mock_comment
 
-        result = _post_preliminary_comment(g, "owner", "repo", 1, "My preliminary plan")
+        result = _post_preliminary_comment(g, "owner", "repo", 1, "My preliminary plan", size="large")
         assert result == 555
         posted_body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
         assert "## Preliminary Plan" in posted_body
         assert "My preliminary plan" in posted_body
         assert "\U0001f44d" in posted_body
-        assert "preliminary" in posted_body.lower()
+        assert "large" in posted_body
+        assert "thorough implementation plan" in posted_body
         assert "💸" not in posted_body  # no cost line when cost is 0
+
+    def test_posts_formatted_comment_small(self):
+        g = MagicMock()
+        mock_comment = MagicMock()
+        mock_comment.id = 556
+        g.get_repo.return_value.get_issue.return_value.create_comment.return_value = mock_comment
+
+        result = _post_preliminary_comment(g, "owner", "repo", 1, "My small plan", size="small")
+        assert result == 556
+        posted_body = g.get_repo.return_value.get_issue.return_value.create_comment.call_args[0][0]
+        assert "small" in posted_body
+        assert "directly to implementation" in posted_body
 
     def test_posts_with_cost(self):
         g = MagicMock()
@@ -238,7 +251,8 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result('{"plan": "' + "x" * 150 + '"}', cost_eur=1.00)), \
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result(
+                 '{"plan": "' + "x" * 150 + '", "size": "large", "branch_name": "clayde/issue-1-fix"}', cost_eur=1.00)), \
              patch("clayde.tasks.plan._post_preliminary_comment", return_value=999) as mock_post, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
              patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
@@ -252,6 +266,8 @@ class TestRunPreliminary:
         assert last["status"] == "awaiting_preliminary_approval"
         assert last["preliminary_comment_id"] == 999
         assert last["last_seen_comment_id"] == 500
+        assert last["size"] == "large"
+        assert last["branch_name"] == "clayde/issue-1-fix"
         # Cost is passed to the comment helper
         mock_post.assert_called_once()
         assert mock_post.call_args[0][4] == "x" * 150
@@ -317,7 +333,8 @@ class TestRunPreliminary:
              patch("clayde.tasks.plan.get_default_branch", return_value="main"), \
              patch("clayde.tasks.plan.ensure_repo", return_value="/tmp/repo"), \
              patch("clayde.tasks.plan._build_preliminary_prompt", return_value="prompt"), \
-             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result('{"plan": "' + "x" * 150 + '"}', cost_eur=1.00)), \
+             patch("clayde.tasks.plan.invoke_claude", return_value=_make_result(
+                 '{"plan": "' + "x" * 150 + '", "size": "small", "branch_name": "clayde/issue-1-fix"}', cost_eur=1.00)), \
              patch("clayde.tasks.plan._post_preliminary_comment", return_value=999) as mock_post, \
              patch("clayde.tasks.plan.fetch_issue_comments", return_value=[mock_comment]), \
              patch("clayde.tasks.plan.pop_accumulated_cost", return_value=2.00):
@@ -344,7 +361,7 @@ class TestRunThorough:
              patch("clayde.tasks.plan.filter_comments", return_value=[]), \
              patch("clayde.tasks.plan._build_thorough_prompt", return_value="prompt"), \
              patch("clayde.tasks.plan.invoke_claude", return_value=_make_result(
-                 '{"plan": "' + "x" * 250 + '", "branch_name": "clayde/issue-1-fix"}', cost_eur=2.00)), \
+                 '{"plan": "' + "x" * 250 + '"}', cost_eur=2.00)), \
              patch("clayde.tasks.plan._post_thorough_plan_comment", return_value=888) as mock_post, \
              patch("clayde.tasks.plan.pop_accumulated_cost", return_value=0.0):
             mock_fc.return_value.body = "preliminary plan"
@@ -356,7 +373,7 @@ class TestRunThorough:
         last = calls[-1][0][1]
         assert last["status"] == "awaiting_plan_approval"
         assert last["plan_comment_id"] == 888
-        assert last["branch_name"] == "clayde/issue-1-fix"
+        assert "branch_name" not in last
         # Cost is passed
         assert mock_post.call_args[0][5] == 2.00
 

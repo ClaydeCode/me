@@ -94,6 +94,8 @@ def run_preliminary(issue_url: str) -> None:
             return
 
         plan_text = parsed.plan
+        size = parsed.size
+        branch_name = parsed.branch_name
 
         if len(plan_text.strip()) < 100:
             log.warning("Claude returned very short preliminary plan for #%d: %s (%d chars)",
@@ -105,7 +107,7 @@ def run_preliminary(issue_url: str) -> None:
             })
             return
 
-        comment_id = _post_preliminary_comment(g, owner, repo, number, plan_text, total_cost)
+        comment_id = _post_preliminary_comment(g, owner, repo, number, plan_text, total_cost, size=size)
 
         # Track the last seen comment so we can detect new ones later
         all_comments = fetch_issue_comments(g, owner, repo, number)
@@ -115,6 +117,8 @@ def run_preliminary(issue_url: str) -> None:
             "status": IssueStatus.AWAITING_PRELIMINARY_APPROVAL,
             "preliminary_comment_id": comment_id,
             "last_seen_comment_id": last_comment_id,
+            "size": size,
+            "branch_name": branch_name,
         })
         span.set_attribute("plan.status", "posted")
         log.info("[%s: %s] Preliminary plan posted (comment %s)", issue_ref(owner, repo, number), issue.title, comment_id)
@@ -186,7 +190,6 @@ def run_thorough(issue_url: str) -> None:
             return
 
         plan_text = parsed.plan
-        branch_name = parsed.branch_name
 
         if len(plan_text.strip()) < 200:
             log.warning("Claude returned very short thorough plan for #%d: %s (%d chars)",
@@ -208,7 +211,6 @@ def run_thorough(issue_url: str) -> None:
             "status": IssueStatus.AWAITING_PLAN_APPROVAL,
             "plan_comment_id": comment_id,
             "last_seen_comment_id": last_comment_id,
-            "branch_name": branch_name,
         })
         span.set_attribute("plan.status", "posted")
         log.info("[%s: %s] Thorough plan posted (comment %s)", issue_ref(owner, repo, number), issue.title, comment_id)
@@ -398,13 +400,17 @@ def _build_update_prompt(number: int, title: str, owner: str, repo: str, body: s
 # ---------------------------------------------------------------------------
 
 def _post_preliminary_comment(g, owner: str, repo: str, number: int, plan_text: str,
-                              cost_eur: float = 0.0) -> int:
+                              cost_eur: float = 0.0, *, size: str = "large") -> int:
+    if size == "small":
+        next_step = "proceed directly to implementation"
+    else:
+        next_step = "proceed to a thorough implementation plan"
     comment_body = (
         f"## Preliminary Plan\n\n"
         f"{plan_text}\n\n"
         f"---\n"
-        f"*React with \U0001f44d to approve this preliminary plan and proceed "
-        f"to a thorough implementation plan.*"
+        f"*This looks like a **{size}** issue. "
+        f"React with \U0001f44d to approve this preliminary plan and {next_step}.*"
         f"{format_cost_line(cost_eur)}"
     )
     return post_comment(g, owner, repo, number, comment_body)

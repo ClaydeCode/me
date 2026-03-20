@@ -40,17 +40,23 @@ class TestStripCodeFences:
 
 class TestParseResponse:
     def test_parses_preliminary_plan(self):
-        text = '{"plan": "My plan here"}'
+        text = '{"plan": "My plan here", "size": "small", "branch_name": "clayde/issue-1-fix"}'
         result = parse_response(text, PreliminaryPlanResponse)
         assert isinstance(result, PreliminaryPlanResponse)
         assert result.plan == "My plan here"
+        assert result.size == "small"
+        assert result.branch_name == "clayde/issue-1-fix"
+
+    def test_parses_preliminary_plan_large(self):
+        text = '{"plan": "Big plan", "size": "large", "branch_name": "clayde/issue-2-big-feature"}'
+        result = parse_response(text, PreliminaryPlanResponse)
+        assert result.size == "large"
 
     def test_parses_thorough_plan(self):
-        text = '{"plan": "Thorough plan", "branch_name": "clayde/issue-5-fix-bug"}'
+        text = '{"plan": "Thorough plan"}'
         result = parse_response(text, ThoroughPlanResponse)
         assert isinstance(result, ThoroughPlanResponse)
         assert result.plan == "Thorough plan"
-        assert result.branch_name == "clayde/issue-5-fix-bug"
 
     def test_parses_update_plan(self):
         text = '{"summary": "Changed X", "updated_plan": "Updated plan"}'
@@ -72,7 +78,7 @@ class TestParseResponse:
         assert result.summary == "Fixed the typo"
 
     def test_strips_code_fences_before_parsing(self):
-        text = '```json\n{"plan": "My plan"}\n```'
+        text = '```json\n{"plan": "My plan", "size": "small", "branch_name": "clayde/issue-1-fix"}\n```'
         result = parse_response(text, PreliminaryPlanResponse)
         assert result.plan == "My plan"
 
@@ -81,10 +87,10 @@ class TestParseResponse:
             parse_response("this is not json", PreliminaryPlanResponse)
 
     def test_missing_required_field_raises_value_error(self):
-        # ThoroughPlanResponse requires both plan and branch_name
-        text = '{"plan": "only plan, no branch_name"}'
+        # PreliminaryPlanResponse requires plan, size, and branch_name
+        text = '{"plan": "only plan, no size or branch_name"}'
         with pytest.raises(ValueError, match="failed validation"):
-            parse_response(text, ThoroughPlanResponse)
+            parse_response(text, PreliminaryPlanResponse)
 
     def test_wrong_type_raises_value_error(self):
         text = '{"plan": 123}'  # plan should be a string
@@ -96,13 +102,13 @@ class TestParseResponse:
             parse_response("", PreliminaryPlanResponse)
 
     def test_extra_fields_are_ignored(self):
-        text = '{"plan": "My plan", "extra_field": "ignored"}'
+        text = '{"plan": "My plan", "size": "small", "branch_name": "clayde/issue-1-fix", "extra_field": "ignored"}'
         result = parse_response(text, PreliminaryPlanResponse)
         assert result.plan == "My plan"
 
     def test_multiline_plan_preserved(self):
         import json
         plan_content = "## Plan\n\nStep 1\nStep 2"
-        text = json.dumps({"plan": plan_content})
+        text = json.dumps({"plan": plan_content, "size": "large", "branch_name": "clayde/issue-1-fix"})
         result = parse_response(text, PreliminaryPlanResponse)
         assert result.plan == plan_content
