@@ -15,6 +15,7 @@ Entry points:
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -228,6 +229,14 @@ def main():
     log.info("=== Starting Clayde Tick [%s] ===", datetime.now().strftime("%Y-%m-%d %H:%M"))
 
     os.environ["GH_TOKEN"] = settings.github_token
+
+    git_name = settings.effective_git_name
+    git_email = settings.git_email
+    if not git_name or not git_email:
+        log.error("CLAYDE_GIT_NAME (or CLAYDE_GITHUB_USERNAME) and CLAYDE_GIT_EMAIL must be set")
+        sys.exit(1)
+    subprocess.run(["git", "config", "--global", "user.name", git_name], check=True)
+    subprocess.run(["git", "config", "--global", "user.email", git_email], check=True)
 
     provider = init_tracer()
     tracer = get_tracer()
