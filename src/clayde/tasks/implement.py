@@ -8,7 +8,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
+from clayde.claude import InvocationTimeoutError, UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client, get_settings
 from clayde.git import ensure_repo
 from clayde.prompts import collect_comments_after, render_template
@@ -80,6 +80,15 @@ def run(issue_url: str) -> None:
             log.warning("[%s: %s] Usage limit hit during implementation — will retry next cycle", issue_ref(owner, repo, number), issue.title)
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("implement.status", "limit")
+            update_issue_state(issue_url, {
+                "status": IssueStatus.INTERRUPTED,
+                "interrupted_phase": IssueStatus.IMPLEMENTING,
+            })
+            return
+        except InvocationTimeoutError as e:
+            log.warning("[%s: %s] Timed out during implementation — will resume next cycle", issue_ref(owner, repo, number), issue.title)
+            accumulate_cost(issue_url, e.cost_eur)
+            span.set_attribute("implement.status", "timeout")
             update_issue_state(issue_url, {
                 "status": IssueStatus.INTERRUPTED,
                 "interrupted_phase": IssueStatus.IMPLEMENTING,

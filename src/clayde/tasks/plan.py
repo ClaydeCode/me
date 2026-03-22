@@ -11,7 +11,7 @@ import logging
 from github import Github
 from github.Issue import Issue
 
-from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
+from clayde.claude import InvocationTimeoutError, UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import get_github_client
 from clayde.git import ensure_repo
 from clayde.github import (
@@ -65,10 +65,11 @@ def run_preliminary(issue_url: str) -> None:
         log.info("[%s: %s] Invoking Claude for preliminary plan", issue_ref(owner, repo, number), issue.title)
         try:
             result = invoke_claude(prompt, repo_path)
-        except UsageLimitError as e:
-            log.warning("Usage limit hit during preliminary planning #%d", number)
+        except (UsageLimitError, InvocationTimeoutError) as e:
+            label = "Timed out" if isinstance(e, InvocationTimeoutError) else "Usage limit hit"
+            log.warning("%s during preliminary planning #%d", label, number)
             accumulate_cost(issue_url, e.cost_eur)
-            span.set_attribute("plan.status", "limit")
+            span.set_attribute("plan.status", "timeout" if isinstance(e, InvocationTimeoutError) else "limit")
             update_issue_state(issue_url, {
                 "status": IssueStatus.INTERRUPTED,
                 "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING,
@@ -161,10 +162,11 @@ def run_thorough(issue_url: str) -> None:
         log.info("[%s: %s] Invoking Claude for thorough plan", issue_ref(owner, repo, number), issue.title)
         try:
             result = invoke_claude(prompt, repo_path)
-        except UsageLimitError as e:
-            log.warning("Usage limit hit during thorough planning #%d", number)
+        except (UsageLimitError, InvocationTimeoutError) as e:
+            label = "Timed out" if isinstance(e, InvocationTimeoutError) else "Usage limit hit"
+            log.warning("%s during thorough planning #%d", label, number)
             accumulate_cost(issue_url, e.cost_eur)
-            span.set_attribute("plan.status", "limit")
+            span.set_attribute("plan.status", "timeout" if isinstance(e, InvocationTimeoutError) else "limit")
             update_issue_state(issue_url, {
                 "status": IssueStatus.INTERRUPTED,
                 "interrupted_phase": IssueStatus.PLANNING,
@@ -278,10 +280,11 @@ def run_update(issue_url: str, phase: str) -> None:
         log.info("[%s: %s] Invoking Claude for plan update (%s phase)", issue_ref(owner, repo, number), issue.title, phase)
         try:
             result = invoke_claude(prompt, repo_path)
-        except UsageLimitError as e:
-            log.warning("Usage limit hit during plan update #%d", number)
+        except (UsageLimitError, InvocationTimeoutError) as e:
+            label = "Timed out" if isinstance(e, InvocationTimeoutError) else "Usage limit hit"
+            log.warning("%s during plan update #%d", label, number)
             accumulate_cost(issue_url, e.cost_eur)
-            span.set_attribute("plan.update_status", "limit")
+            span.set_attribute("plan.update_status", "timeout" if isinstance(e, InvocationTimeoutError) else "limit")
             update_issue_state(issue_url, {
                 "status": IssueStatus.INTERRUPTED,
                 "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING if phase == "preliminary" else IssueStatus.PLANNING,
