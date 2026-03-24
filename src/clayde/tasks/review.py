@@ -2,7 +2,7 @@
 
 import logging
 
-from clayde.claude import UsageLimitError, format_cost_line, invoke_claude
+from clayde.claude import InvocationTimeoutError, UsageLimitError, format_cost_line, invoke_claude
 from clayde.config import DATA_DIR, get_github_client, get_settings
 from clayde.git import ensure_repo
 from clayde.prompts import render_template
@@ -112,10 +112,11 @@ def run(issue_url: str) -> None:
                 branch_name=branch_name,
                 conversation_path=conversation_path,
             )
-        except UsageLimitError as e:
-            log.warning("[%s] Usage limit hit during review handling", issue_label)
+        except (UsageLimitError, InvocationTimeoutError) as e:
+            label_msg = "Timed out" if isinstance(e, InvocationTimeoutError) else "Usage limit hit"
+            log.warning("[%s] %s during review handling", issue_label, label_msg)
             accumulate_cost(issue_url, e.cost_eur)
-            span.set_attribute("review.status", "limit")
+            span.set_attribute("review.status", "timeout" if isinstance(e, InvocationTimeoutError) else "limit")
             update_issue_state(issue_url, {
                 "status": IssueStatus.INTERRUPTED,
                 "interrupted_phase": IssueStatus.ADDRESSING_REVIEW,

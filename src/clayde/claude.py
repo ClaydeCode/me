@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -55,6 +56,18 @@ class InvocationResult:
 
 class UsageLimitError(Exception):
     """Raised when Claude reports a usage/rate limit."""
+
+    def __init__(self, message: str, cost_eur: float = 0.0):
+        super().__init__(message)
+        self.cost_eur = cost_eur
+
+
+class InvocationTimeoutError(Exception):
+    """Raised when a Claude invocation exceeds the configured timeout.
+
+    Distinct from UsageLimitError — timeouts are not rate limits.
+    WIP is committed and conversation state is saved for seamless resumption.
+    """
 
     def __init__(self, message: str, cost_eur: float = 0.0):
         super().__init__(message)
@@ -338,6 +351,17 @@ class ApiBackend(ClaudeBackend):
                     repo_path=repo_path, span=span, timeout_s=tool_loop_timeout_s,
                     token_counter=token_counter,
                 )
+            except TimeoutError as e:
+                log.error("Claude API tool loop timed out after %ds", tool_loop_timeout_s)
+                if branch_name:
+                    commit_wip(repo_path, branch_name)
+                if conversation_path:
+                    self._save_conversation(conversation_path, messages)
+                partial_cost_eur = _calculate_cost_usd(model, token_counter["input"], token_counter["output"]) * _EUR_PER_USD
+                span.set_attribute("claude.timeout", True)
+                timeout_exc = InvocationTimeoutError(str(e), cost_eur=partial_cost_eur)
+                span.record_exception(timeout_exc)
+                raise timeout_exc from e
             except anthropic.APIConnectionError as e:
                 log.error("Claude API connection error: %s", e)
                 raise self._build_usage_limit_error(
@@ -477,6 +501,17 @@ class CliBackend(ClaudeBackend):
             span.set_attribute("claude.backend", "cli")
             span.set_attribute("claude.cli_bin", cli_bin)
 
+            # Determine session ID: load existing or generate new
+            session_id = None
+            resumed = False
+            if conversation_path:
+                session_id = self._load_session_id(conversation_path)
+                if session_id:
+                    resumed = True
+
+            if not session_id:
+                session_id = str(uuid.uuid4())
+
             cmd = [
                 cli_bin, "-p", prompt,
                 "--append-system-prompt", identity,
@@ -484,16 +519,19 @@ class CliBackend(ClaudeBackend):
                 "--dangerously-skip-permissions",
             ]
 
-            # Resume from a previous session if available
+            if resumed:
+                cmd.extend(["--resume", session_id])
+                span.set_attribute("claude.resumed", True)
+                span.set_attribute("claude.resumed_session_id", session_id)
+                log.info("Resuming CLI session %s", session_id)
+            else:
+                cmd.extend(["--session-id", session_id])
+                span.set_attribute("claude.resumed", False)
+                span.set_attribute("claude.session_id", session_id)
+
+            # Save session ID immediately so it survives timeouts
             if conversation_path:
-                session_id = self._load_session_id(conversation_path)
-                if session_id:
-                    cmd.extend(["--resume", session_id])
-                    span.set_attribute("claude.resumed", True)
-                    span.set_attribute("claude.resumed_session_id", session_id)
-                    log.info("Resuming CLI session %s", session_id)
-                else:
-                    span.set_attribute("claude.resumed", False)
+                self._save_session_id(conversation_path, session_id)
 
             try:
                 result = subprocess.run(
@@ -505,7 +543,7 @@ class CliBackend(ClaudeBackend):
                 if branch_name:
                     commit_wip(repo_path, branch_name)
                 span.set_attribute("claude.timeout", True)
-                exc = UsageLimitError(f"Claude CLI timed out after {timeout_s}s")
+                exc = InvocationTimeoutError(f"Claude CLI timed out after {timeout_s}s")
                 span.record_exception(exc)
                 raise exc
 
@@ -515,14 +553,15 @@ class CliBackend(ClaudeBackend):
                 and "no conversation found with session id" in (result.stderr or "").lower()
                 and conversation_path
             ):
-                log.warning("CLI session not found — deleting stale conversation file and retrying fresh")
-                conversation_path.unlink(missing_ok=True)
-                # Rebuild command without --resume
+                log.warning("CLI session not found — retrying with new session")
+                session_id = str(uuid.uuid4())
+                self._save_session_id(conversation_path, session_id)
                 cmd = [
                     cli_bin, "-p", prompt,
                     "--append-system-prompt", identity,
                     "--output-format", "json",
                     "--dangerously-skip-permissions",
+                    "--session-id", session_id,
                 ]
                 span.set_attribute("claude.stale_session_retry", True)
                 try:
@@ -535,7 +574,7 @@ class CliBackend(ClaudeBackend):
                     if branch_name:
                         commit_wip(repo_path, branch_name)
                     span.set_attribute("claude.timeout", True)
-                    exc = UsageLimitError(f"Claude CLI timed out after {timeout_s}s")
+                    exc = InvocationTimeoutError(f"Claude CLI timed out after {timeout_s}s")
                     span.record_exception(exc)
                     raise exc
 

@@ -3,12 +3,13 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from clayde.claude import InvocationResult, UsageLimitError
+from clayde.claude import InvocationResult, InvocationTimeoutError, UsageLimitError
 from clayde.prompts import collect_comments_after
 from clayde.tasks.implement import (
     _assign_reviewer_and_finish,
     _checkout_wip_branch,
     _post_result,
+    _prepare_implementation_context,
     run,
 )
 
@@ -198,6 +199,29 @@ class TestRun:
         assert last_call[0][1]["status"] == "interrupted"
         assert last_call[0][1]["interrupted_phase"] == "implementing"
         mock_accum.assert_called_once_with("url", 2.00)
+
+    def test_timeout_sets_interrupted_and_accumulates_cost(self, tmp_path):
+        with patch("clayde.tasks.implement.get_github_client"), \
+             patch("clayde.tasks.implement.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.tasks.implement.get_issue_state", return_value={"plan_comment_id": 100}), \
+             patch("clayde.tasks.implement.update_issue_state") as mock_update, \
+             patch("clayde.tasks.implement.fetch_issue"), \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value="/tmp/repo"), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement.filter_comments", return_value=[]), \
+             patch("clayde.tasks.implement._build_prompt", return_value="prompt"), \
+             patch("clayde.tasks.implement.invoke_claude", side_effect=InvocationTimeoutError("timeout", cost_eur=1.50)), \
+             patch("clayde.tasks.implement.accumulate_cost") as mock_accum, \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
+            mock_fc.return_value.body = "plan text"
+            run("url")
+
+        last_call = mock_update.call_args_list[-1]
+        assert last_call[0][1]["status"] == "interrupted"
+        assert last_call[0][1]["interrupted_phase"] == "implementing"
+        mock_accum.assert_called_once_with("url", 1.50)
 
     def test_resumes_interrupted_with_existing_pr(self):
         state = {"plan_comment_id": 100, "status": "interrupted"}
@@ -475,3 +499,29 @@ class TestDeleteConversationFile:
             run("https://github.com/o/r/issues/1")
 
         assert not conv_file.exists()
+
+
+class TestPrepareImplementationContext:
+    """Tests for _prepare_implementation_context."""
+
+    def test_falls_back_to_preliminary_comment_id(self, tmp_path):
+        """Small issues have no plan_comment_id; should use preliminary_comment_id."""
+        g = MagicMock()
+        issue_state = {"preliminary_comment_id": 42, "branch_name": "clayde/issue-1"}
+
+        with patch("clayde.tasks.implement.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value=tmp_path), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.update_issue_state"), \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement.filter_comments", return_value=[]), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
+            mock_fi.return_value.title = "Test"
+            mock_fc.return_value.body = "preliminary plan text"
+
+            _prepare_implementation_context(
+                g, "o", "r", 1, "https://github.com/o/r/issues/1", issue_state, False,
+            )
+
+            mock_fc.assert_called_once_with(g, "o", "r", 1, 42)

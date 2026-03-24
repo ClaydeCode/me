@@ -11,6 +11,7 @@ from clayde.claude import (
     ApiBackend,
     CliBackend,
     InvocationResult,
+    InvocationTimeoutError,
     UsageLimitError,
     _calculate_cost_usd,
     _get_backend,
@@ -333,8 +334,38 @@ class TestApiBackendInvoke:
              patch.object(backend, "_get_client", return_value=mock_client), \
              patch.object(ApiBackend, "_execute_tool", return_value="output"), \
              patch("clayde.claude.time.monotonic", side_effect=fake_monotonic):
-            with pytest.raises(TimeoutError):
+            with pytest.raises(InvocationTimeoutError):
                 backend.invoke("implement", str(tmp_path))
+
+    def test_tool_loop_timeout_saves_conversation(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"
+        tool_block = _make_tool_use_block("bash", "tool-1", {"command": "echo loop"})
+        tool_response = _make_tool_response([tool_block])
+        mock_client = MagicMock()
+        mock_client.beta.messages.create.return_value = tool_response
+        backend = ApiBackend()
+
+        call_count = [0]
+        def fake_monotonic():
+            call_count[0] += 1
+            if call_count[0] <= 1:
+                return 0.0
+            return 2000.0
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()), \
+             patch.object(backend, "_get_client", return_value=mock_client), \
+             patch.object(ApiBackend, "_execute_tool", return_value="output"), \
+             patch("clayde.claude.time.monotonic", side_effect=fake_monotonic), \
+             patch("clayde.claude.commit_wip") as mock_wip:
+            with pytest.raises(InvocationTimeoutError) as exc_info:
+                backend.invoke("implement", str(tmp_path),
+                              branch_name="branch", conversation_path=conv_path)
+            mock_wip.assert_called_once_with(str(tmp_path), "branch")
+
+        assert conv_path.exists()
+        assert exc_info.value.cost_eur >= 0.0
 
     def test_token_usage_accumulated_across_turns(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
@@ -652,6 +683,7 @@ class TestCliBackendInvoke:
 
         assert conv_path.exists()
         data = json.loads(conv_path.read_text())
+        # Session ID from response overwrites the pre-generated one
         assert data["session_id"] == "my-session-id"
 
     def test_resumes_from_session_id(self, tmp_path):
@@ -659,7 +691,7 @@ class TestCliBackendInvoke:
         conv_path = tmp_path / "conv.json"
         conv_path.write_text(json.dumps({"session_id": "prev-session"}))
         mock_result = MagicMock()
-        mock_result.stdout = self._cli_json_output("resumed")
+        mock_result.stdout = self._cli_json_output("resumed", "prev-session")
         mock_result.stderr = ""
         mock_result.returncode = 0
         backend = CliBackend()
@@ -731,7 +763,7 @@ class TestCliBackendInvoke:
         data = json.loads(conv_path.read_text())
         assert data["session_id"] == "limit-session"
 
-    def test_timeout_raises_usage_limit_error(self, tmp_path):
+    def test_timeout_raises_invocation_timeout_error(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
         backend = CliBackend()
 
@@ -740,9 +772,47 @@ class TestCliBackendInvoke:
              patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
              patch("clayde.claude.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("claude", 1800)), \
              patch("clayde.claude.commit_wip") as mock_wip:
-            with pytest.raises(UsageLimitError):
+            with pytest.raises(InvocationTimeoutError):
                 backend.invoke("prompt", "/repo", branch_name="branch")
             mock_wip.assert_called_once_with("/repo", "branch")
+
+    def test_timeout_saves_session_id_for_resumption(self, tmp_path):
+        """When a fresh CLI session times out, the pre-generated session ID is saved for resumption."""
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"
+        backend = CliBackend()
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("claude", 1800)), \
+             patch("clayde.claude.commit_wip"):
+            with pytest.raises(InvocationTimeoutError):
+                backend.invoke("prompt", "/repo", branch_name="branch", conversation_path=conv_path)
+
+        # Session ID should be saved even though the process timed out
+        assert conv_path.exists()
+        data = json.loads(conv_path.read_text())
+        assert data["session_id"]  # a UUID was generated and saved
+
+    def test_timeout_preserves_session_id_for_resumed(self, tmp_path):
+        """When a resumed CLI session times out, the session ID is preserved for next resumption."""
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        conv_path = tmp_path / "conv.json"
+        conv_path.write_text(json.dumps({"session_id": "my-session"}))
+        backend = CliBackend()
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("claude", 1800)), \
+             patch("clayde.claude.commit_wip"):
+            with pytest.raises(InvocationTimeoutError):
+                backend.invoke("prompt", "/repo", branch_name="branch", conversation_path=conv_path)
+
+        # Session ID should still be in the conversation file
+        data = json.loads(conv_path.read_text())
+        assert data["session_id"] == "my-session"
 
     def test_fallback_on_non_json_stdout(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("identity")
@@ -760,8 +830,8 @@ class TestCliBackendInvoke:
 
         assert result.output == "plain text output"
 
-    def test_stale_session_retries_fresh(self, tmp_path):
-        """When CLI reports 'No conversation found', delete conv file and retry without --resume."""
+    def test_stale_session_retries_with_new_session_id(self, tmp_path):
+        """When CLI reports 'No conversation found', retry with a new session ID."""
         (tmp_path / "CLAUDE.md").write_text("identity")
         conv_path = tmp_path / "conv.json"
         conv_path.write_text(json.dumps({"session_id": "stale-session"}))
@@ -788,12 +858,13 @@ class TestCliBackendInvoke:
             result = backend.invoke("prompt", str(tmp_path), conversation_path=conv_path)
 
         assert result.output == "fresh output"
-        # First call should have --resume, second should not
+        # First call should have --resume, second should have --session-id (new UUID)
         first_cmd = mock_run.call_args_list[0][0][0]
         second_cmd = mock_run.call_args_list[1][0][0]
         assert "--resume" in first_cmd
         assert "--resume" not in second_cmd
-        # Conv file should now have the new session ID
+        assert "--session-id" in second_cmd
+        # Conv file should now have the new session ID from the response
         data = json.loads(conv_path.read_text())
         assert data["session_id"] == "new-session"
 
