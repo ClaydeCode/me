@@ -9,6 +9,7 @@ from clayde.tasks.implement import (
     _assign_reviewer_and_finish,
     _checkout_wip_branch,
     _post_result,
+    _prepare_implementation_context,
     run,
 )
 
@@ -498,3 +499,29 @@ class TestDeleteConversationFile:
             run("https://github.com/o/r/issues/1")
 
         assert not conv_file.exists()
+
+
+class TestPrepareImplementationContext:
+    """Tests for _prepare_implementation_context."""
+
+    def test_falls_back_to_preliminary_comment_id(self, tmp_path):
+        """Small issues have no plan_comment_id; should use preliminary_comment_id."""
+        g = MagicMock()
+        issue_state = {"preliminary_comment_id": 42, "branch_name": "clayde/issue-1"}
+
+        with patch("clayde.tasks.implement.fetch_issue") as mock_fi, \
+             patch("clayde.tasks.implement.get_default_branch", return_value="main"), \
+             patch("clayde.tasks.implement.ensure_repo", return_value=tmp_path), \
+             patch("clayde.tasks.implement.fetch_comment") as mock_fc, \
+             patch("clayde.tasks.implement.update_issue_state"), \
+             patch("clayde.tasks.implement.fetch_issue_comments", return_value=[]), \
+             patch("clayde.tasks.implement.filter_comments", return_value=[]), \
+             patch("clayde.tasks.implement.DATA_DIR", tmp_path):
+            mock_fi.return_value.title = "Test"
+            mock_fc.return_value.body = "preliminary plan text"
+
+            _prepare_implementation_context(
+                g, "o", "r", 1, "https://github.com/o/r/issues/1", issue_state, False,
+            )
+
+            mock_fc.assert_called_once_with(g, "o", "r", 1, 42)

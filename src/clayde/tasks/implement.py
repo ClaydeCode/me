@@ -137,7 +137,7 @@ def _try_resume_from_existing_pr(g, owner, repo, number, issue_url, issue_state,
 
 def _prepare_implementation_context(g, owner, repo, number, issue_url, issue_state, resumed):
     """Fetch all resources needed to run Claude and return them as a tuple."""
-    plan_comment_id = issue_state["plan_comment_id"]
+    plan_comment_id = issue_state.get("plan_comment_id") or issue_state["preliminary_comment_id"]
     issue = fetch_issue(g, owner, repo, number)
     default_branch = get_default_branch(g, owner, repo)
     repo_path = ensure_repo(owner, repo, default_branch)
