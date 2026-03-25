@@ -285,10 +285,6 @@ def run_update(issue_url: str, phase: str) -> None:
             log.warning("%s during plan update #%d", label, number)
             accumulate_cost(issue_url, e.cost_eur)
             span.set_attribute("plan.update_status", "timeout" if isinstance(e, InvocationTimeoutError) else "limit")
-            update_issue_state(issue_url, {
-                "status": IssueStatus.INTERRUPTED,
-                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING if phase == "preliminary" else IssueStatus.PLANNING,
-            })
             return
 
         total_cost = pop_accumulated_cost(issue_url) + result.cost_eur
@@ -301,10 +297,6 @@ def run_update(issue_url: str, phase: str) -> None:
         except ValueError as e:
             log.error("[%s: %s] Failed to parse update plan response: %s", issue_ref(owner, repo, number), issue.title, e)
             span.set_attribute("plan.update_status", "parse_error")
-            update_issue_state(issue_url, {
-                "status": IssueStatus.INTERRUPTED,
-                "interrupted_phase": IssueStatus.PRELIMINARY_PLANNING if phase == "preliminary" else IssueStatus.PLANNING,
-            })
             return
 
         if updated_plan:

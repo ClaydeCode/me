@@ -471,8 +471,8 @@ class TestRunUpdate:
             run_update("url", "preliminary")
 
         mock_accum.assert_called_once_with("url", 0.30)
-        last_call = mock_update.call_args_list[-1]
-        assert last_call[0][1]["status"] == "interrupted"
+        # Status must NOT be changed — issue stays in awaiting_*_approval for retry
+        mock_update.assert_not_called()
 
     def test_skips_when_no_new_comments(self):
         old_comment = MagicMock()
