@@ -14,10 +14,11 @@ Clayde is assigned GitHub issues in software repositories. For each issue it:
 
 1. Researches the codebase and writes a **preliminary plan**, posting it as a GitHub comment
 2. Waits for human approval (a 👍 reaction) before continuing
-3. Writes a **detailed implementation plan** and posts it as another comment
-4. Waits for approval again before touching any code
-5. Implements the solution on a new branch, opens a pull request, and posts a summary comment
-6. Addresses any review comments left on the PR
+3. For **large issues**: writes a **detailed implementation plan** and posts it as another comment, then waits for approval again before touching any code. For **small issues**: skips directly to implementation after preliminary approval.
+4. Implements the solution on a new branch, opens a pull request, and posts a summary comment
+5. Addresses any review comments left on the PR
+
+At any point while waiting for approval, new comments on the issue will trigger a plan update — Clayde revises the plan and posts a summary of what changed.
 
 Clayde runs as a Docker container in a continuous loop (default: every 5 minutes), driven by a state machine persisted in `data/state.json`.
 
@@ -31,8 +32,11 @@ Each issue moves through the following states:
 stateDiagram-v2
     [*] --> preliminary_planning
     preliminary_planning --> awaiting_preliminary_approval
-    awaiting_preliminary_approval --> planning: 👍 approved
+    awaiting_preliminary_approval --> awaiting_preliminary_approval: new comment → plan updated
+    awaiting_preliminary_approval --> planning: 👍 approved (large issue)
+    awaiting_preliminary_approval --> implementing: 👍 approved (small issue)
     planning --> awaiting_plan_approval
+    awaiting_plan_approval --> awaiting_plan_approval: new comment → plan updated
     awaiting_plan_approval --> implementing: 👍 approved
     implementing --> pr_open
     pr_open --> addressing_review: review comments received
@@ -46,9 +50,9 @@ stateDiagram-v2
 | State | Description |
 |---|---|
 | `preliminary_planning` | Claude explores the codebase and writes a short overview with clarifying questions |
-| `awaiting_preliminary_approval` | Preliminary plan posted; waiting for 👍 from an approver |
+| `awaiting_preliminary_approval` | Preliminary plan posted; waiting for 👍 from an approver. New comments trigger a plan update. Small issues skip to `implementing` on approval; large issues proceed to `planning`. |
 | `planning` | Claude writes a detailed implementation plan |
-| `awaiting_plan_approval` | Full plan posted; waiting for 👍 from an approver |
+| `awaiting_plan_approval` | Full plan posted; waiting for 👍 from an approver. New comments trigger a plan update. |
 | `implementing` | Claude implements the solution on a new branch |
 | `pr_open` | PR opened; monitoring for review comments |
 | `addressing_review` | Claude is addressing PR review comments |
