@@ -12,11 +12,12 @@ Clayde is a persistent autonomous AI software agent that lives on a dedicated VM
 
 Clayde is assigned GitHub issues in software repositories. For each issue it:
 
-1. Researches the codebase to understand the context
-2. Writes an implementation plan and posts it as a GitHub comment
-3. Waits for human approval (a 👍 reaction)
-4. Implements the solution on a new branch
-5. Opens a pull request and posts a summary comment
+1. Researches the codebase and writes a **preliminary plan**, posting it as a GitHub comment
+2. Waits for human approval (a 👍 reaction) before continuing
+3. Writes a **detailed implementation plan** and posts it as another comment
+4. Waits for approval again before touching any code
+5. Implements the solution on a new branch, opens a pull request, and posts a summary comment
+6. Addresses any review comments left on the PR
 
 Clayde runs as a Docker container in a continuous loop (default: every 5 minutes), driven by a state machine persisted in `data/state.json`.
 
@@ -26,45 +27,63 @@ Clayde runs as a Docker container in a continuous loop (default: every 5 minutes
 
 Each issue moves through the following states:
 
-```
-(new issue) ──► planning ──► awaiting_approval ──► implementing ──► done
-                                                                  ↘ failed
+```mermaid
+stateDiagram-v2
+    [*] --> preliminary_planning
+    preliminary_planning --> awaiting_preliminary_approval
+    awaiting_preliminary_approval --> planning: 👍 approved
+    planning --> awaiting_plan_approval
+    awaiting_plan_approval --> implementing: 👍 approved
+    implementing --> pr_open
+    pr_open --> addressing_review: review comments received
+    addressing_review --> pr_open
+    pr_open --> done: PR approved
+    implementing --> failed: error
+    done --> [*]
+    failed --> [*]
 ```
 
 | State | Description |
 |---|---|
-| `planning` | Claude is researching and writing a plan |
-| `awaiting_approval` | Plan posted as comment; waiting for 👍 from an approver |
-| `implementing` | Claude is implementing the solution |
-| `done` | PR opened; issue complete |
+| `preliminary_planning` | Claude explores the codebase and writes a short overview with clarifying questions |
+| `awaiting_preliminary_approval` | Preliminary plan posted; waiting for 👍 from an approver |
+| `planning` | Claude writes a detailed implementation plan |
+| `awaiting_plan_approval` | Full plan posted; waiting for 👍 from an approver |
+| `implementing` | Claude implements the solution on a new branch |
+| `pr_open` | PR opened; monitoring for review comments |
+| `addressing_review` | Claude is addressing PR review comments |
+| `done` | PR approved; issue complete |
 | `failed` | Error occurred; requires manual reset to retry |
 | `interrupted` | Claude hit a usage/rate limit; retried automatically next cycle |
 
 ---
 
-## Safety Gates
+## Safety & Content Filtering
 
-Two independent checks must pass before any work begins:
+Clayde uses **content filtering** rather than gatekeeping which issues to work on. It will only act on content that is visible:
 
-**1. Issue-level gate** (before planning)
-The issue must be created by a whitelisted user, or have a 👍 reaction from a whitelisted user on the issue itself.
+- An issue body or comment is **visible** if it was written by a whitelisted user, or has a 👍 reaction from a whitelisted user.
+- If an issue has no visible content at all, it is skipped.
+- Blocked issues (those with "blocked by #N" or "depends on #N" in the body) are also skipped.
 
-**2. Plan approval gate** (before implementation)
-The plan comment must have a 👍 reaction from any whitelisted user.
+Two approval gates then guard forward progress:
+
+1. **Preliminary plan approval** — a 👍 from a whitelisted user on the preliminary plan comment is required before the full plan is written.
+2. **Plan approval** — a 👍 from a whitelisted user on the full plan comment is required before implementation begins.
 
 Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env`.
-
-This two-tier system ensures Clayde only acts on trusted issues and only implements plans that have been explicitly reviewed and approved.
 
 ---
 
 ## Capabilities
 
 - **Multi-repo support**: Clones and works on any GitHub repository it has access to
+- **Two-phase planning**: Preliminary exploration followed by a detailed plan, each gated by human approval
 - **Full issue lifecycle**: Plan → approval → implement → PR, with comments at each stage
+- **PR review handling**: Reads and addresses reviewer feedback automatically
 - **Rate-limit resilience**: Detects Claude usage limits and automatically retries
 - **Safety gates**: Whitelist + approval checks prevent unauthorized work
-- **Observability**: OpenTelemetry tracing with JSONL file export and optional OTLP export
+- **Observability**: OpenTelemetry tracing with JSONL file export
 - **Dual Claude backend**: Use the Anthropic API (pay-per-token) or the Claude Code CLI (subscription-based)
 
 ---
@@ -87,16 +106,34 @@ This two-tier system ensures Clayde only acts on trusted issues and only impleme
 
 ## Setup
 
-### 1. Create the data directory
+### 1. Create a dedicated bot GitHub account
+
+Create a GitHub account for your bot (e.g. `my-bot`). This is the account that will be assigned issues and open pull requests.
+
+### 2. Create a GitHub Personal Access Token for the bot
+
+From the bot account, create a classic personal access token with the full **`repo`** scope.
+
+### 3. Configure the instance
 
 ```bash
 mkdir -p data/logs data/repos
 cp config.env.template data/config.env
 ```
 
-Edit `data/config.env` and fill in the required values (see Configuration below).
+Edit `data/config.env`:
 
-### 2. Choose a Claude backend
+```
+CLAYDE_GITHUB_TOKEN=github_pat_...
+CLAYDE_GITHUB_USERNAME=my-bot
+CLAYDE_GIT_EMAIL=my-bot@example.com
+CLAYDE_ENABLED=true
+CLAYDE_WHITELISTED_USERS=your-username,my-bot
+```
+
+See [Configuration](#configuration) for all available settings.
+
+### 4. Choose a Claude backend
 
 Clayde supports two backends for invoking Claude, selected by `CLAYDE_CLAUDE_BACKEND` in `data/config.env`:
 
@@ -127,13 +164,17 @@ Runs the Claude Code CLI as a subprocess. Uses your Claude Pro/Max subscription 
 
 The `docker-compose.yml` mounts `~/.claude/.credentials.json` from the host directly into the container. Token refreshes, logouts, and account switches on the host are immediately reflected.
 
-### 3. Start the container
+### 5. Start the container
 
 ```bash
 docker compose up -d
 ```
 
-Clayde will start its loop, checking for assigned issues every 5 minutes (configurable via `CLAYDE_LOOP_INTERVAL_S`).
+Clayde will start its loop, checking for assigned issues every 5 minutes (configurable via `CLAYDE_INTERVAL`).
+
+### 6. Assign issues to your bot
+
+In any repository the bot has access to, assign issues to the bot account. Clayde will pick them up automatically on the next loop cycle.
 
 ---
 
@@ -149,50 +190,7 @@ Clayde will start its loop, checking for assigned issues every 5 minutes (config
 | `CLAYDE_GIT_EMAIL` | Git commit author email (required) |
 | `CLAYDE_ENABLED` | Set to `true` to activate |
 | `CLAYDE_WHITELISTED_USERS` | Comma-separated trusted GitHub usernames |
+| `CLAYDE_INTERVAL` | Loop interval in seconds (default: `300`) |
 | `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` |
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
-
----
-
-## Deploying Your Own Instance
-
-Clayde is designed to be deployed by anyone. To run your own instance:
-
-### 1. Create a dedicated bot GitHub account
-
-Create a GitHub account for your bot (e.g. `my-bot`). This is the account that will be assigned issues and open pull requests.
-
-### 2. Create a GitHub Personal Access Token for the bot
-
-From the bot account, create a classic personal access token with the full **`repo`** scope.
-
-### 3. Configure the instance
-
-```bash
-mkdir -p data/logs data/repos
-cp config.env.template data/config.env
-```
-
-Edit `data/config.env`:
-
-```
-CLAYDE_GITHUB_TOKEN=github_pat_...
-CLAYDE_GITHUB_USERNAME=my-bot
-CLAYDE_GIT_EMAIL=my-bot@example.com
-CLAYDE_ENABLED=true
-CLAYDE_WHITELISTED_USERS=your-username,my-bot
-```
-
-### 4. Choose a Claude backend and start
-
-Follow the backend instructions in the [Setup](#setup) section above, then run:
-
-```bash
-docker compose up -d
-```
-
-### 5. Assign issues to your bot
-
-In any repository the bot has access to, assign issues to the bot account. Clayde will pick them up automatically on the next loop cycle.
-
