@@ -18,7 +18,9 @@ Steps:
 2. Create or switch to branch: git checkout -b {{ branch_name }} (or git checkout {{ branch_name }} if it exists)
 3. Implement the plan carefully, following existing code style and paying attention to agents.md files if they exist
 4. Write or update tests if applicable
-5. Run tests if a test command is discoverable (check CLAUDE.md, README, Makefile, package.json, pyproject.toml, justfile)
+5. Run tests if a test command is discoverable (check CLAUDE.md, README, Makefile, package.json, pyproject.toml, justfile):
+   - If no test runner is discoverable, skip this step.
+   - If a test suite exists: first note any pre-existing failures (run tests on the base branch before your changes if needed), then ensure all tests pass after your changes (pre-existing failures are exempt). If there are pre-existing failures, you MUST mention them in your PR summary. Do NOT commit if your changes introduced new test failures.
 6. Review your own changes for correctness, edge cases, and style and run "just cleanup" if it exists before committing
 7. Commit with a clear message, e.g.: "Fix #{{ number }}: <summary>"
 8. Push: git push origin {{ branch_name }}
