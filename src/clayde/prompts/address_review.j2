@@ -16,13 +16,15 @@ REPOSITORY ON DISK: {{ repo_path }}
 
 Steps:
 1. Check out the branch: git checkout {{ branch_name }} && git pull origin {{ branch_name }}
-2. Read and understand each review comment
-3. Make the requested changes
-4. Run tests if a test command is discoverable (check CLAUDE.md, README, Makefile, package.json, pyproject.toml, justfile):
+2. Read the README (README.md, README.rst, README.txt, or README) and agents.md at the root and in any relevant subdirectories.
+3. Read and understand each review comment.
+4. Make the requested changes.
+5. If any changes affect documented usage, configuration, architecture, or behavior, update the README and agents.md accordingly.
+6. Run tests if a test command is discoverable (check CLAUDE.md, README, Makefile, package.json, pyproject.toml, justfile):
    - If no test runner is discoverable, skip this step.
    - If a test suite exists: ensure all tests pass after your changes (pre-existing failures are exempt). Do NOT commit if your changes introduced new test failures.
-5. Commit with a clear message referencing the review, e.g.: "Address review: <summary>"
-6. Push: git push origin {{ branch_name }}
+7. Commit with a clear message referencing the review, e.g.: "Address review: <summary>"
+8. Push: git push origin {{ branch_name }}
 
 After making all changes, provide a short summary of what you changed in response
 to each review comment.
