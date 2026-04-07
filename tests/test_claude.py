@@ -888,6 +888,42 @@ class TestCliBackendInvoke:
         assert result.output == ""
         assert mock_run.call_count == 1
 
+    def test_auth_error_raises_runtime_error(self, tmp_path):
+        """is_error=True with auth failure raises RuntimeError instead of returning error text."""
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        auth_error_text = (
+            'Failed to authenticate. API Error: 401 {"type":"error","error":{'
+            '"type":"authentication_error","message":"Invalid authentication credentials"}}'
+        )
+        mock_result = MagicMock()
+        mock_result.stdout = json.dumps({"is_error": True, "result": auth_error_text})
+        mock_result.stderr = ""
+        mock_result.returncode = 0
+        backend = CliBackend()
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="authentication failed"):
+                backend.invoke("prompt", "/repo")
+
+    def test_not_logged_in_raises_runtime_error(self, tmp_path):
+        """is_error=True with 'not logged in' text raises RuntimeError."""
+        (tmp_path / "CLAUDE.md").write_text("identity")
+        mock_result = MagicMock()
+        mock_result.stdout = json.dumps({"is_error": True, "result": "Not logged in · Please run /login"})
+        mock_result.stderr = ""
+        mock_result.returncode = 0
+        backend = CliBackend()
+
+        with patch("clayde.claude.APP_DIR", tmp_path), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="authentication failed"):
+                backend.invoke("prompt", "/repo")
+
 
 class TestCliBackendIsAvailable:
     def test_available_on_success(self):
@@ -919,6 +955,25 @@ class TestCliBackendIsAvailable:
         mock_result.stdout = '{"is_error": true, "result": "Not logged in \\u00b7 Please run /login"}'
         mock_result.stderr = ""
         mock_result.returncode = 1
+        backend = CliBackend()
+
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
+             patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
+             patch("clayde.claude.subprocess.run", return_value=mock_result):
+            assert backend.is_available() is False
+
+    def test_unavailable_on_failed_to_authenticate(self):
+        mock_result = MagicMock()
+        mock_result.stdout = json.dumps({
+            "is_error": True,
+            "result": (
+                "Failed to authenticate. API Error: 401 "
+                '{"type":"error","error":{"type":"authentication_error",'
+                '"message":"Invalid authentication credentials"}}'
+            ),
+        })
+        mock_result.stderr = ""
+        mock_result.returncode = 0
         backend = CliBackend()
 
         with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \

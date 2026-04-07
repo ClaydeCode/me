@@ -43,6 +43,14 @@ _LIMIT_PATTERNS = [
     "hit your limit",
 ]
 
+# Text patterns that indicate an authentication error in CLI error output.
+_AUTH_ERROR_PATTERNS = [
+    "not logged in",
+    "failed to authenticate",
+    "authentication_error",
+    "invalid authentication credentials",
+]
+
 
 @dataclasses.dataclass
 class InvocationResult:
@@ -446,6 +454,12 @@ def _is_limit_error(text: str) -> bool:
     return any(p in t for p in _LIMIT_PATTERNS)
 
 
+def _is_auth_error(text: str) -> bool:
+    """Return True if text contains an authentication error pattern."""
+    t = text.lower()
+    return any(p in t for p in _AUTH_ERROR_PATTERNS)
+
+
 def _make_cli_env() -> dict[str, str]:
     """Build an environment dict for CLI subprocess calls."""
     env = os.environ.copy()
@@ -613,6 +627,11 @@ class CliBackend(ClaudeBackend):
                     exc = UsageLimitError("Claude CLI usage limit hit")
                     span.record_exception(exc)
                     raise exc
+                if _is_auth_error(error_text):
+                    log.error("Claude CLI authentication failed")
+                    exc = RuntimeError("Claude CLI authentication failed")
+                    span.record_exception(exc)
+                    raise exc
 
             if result.returncode != 0:
                 log.error("Claude CLI exited with code %d", result.returncode)
@@ -652,8 +671,8 @@ class CliBackend(ClaudeBackend):
                 if _is_limit_error(error_text):
                     span.set_attribute("claude.available", False)
                     return False
-                if is_error and "not logged in" in error_text.lower():
-                    log.warning("Claude CLI is not logged in — marking unavailable")
+                if is_error and _is_auth_error(error_text):
+                    log.warning("Claude CLI authentication failed — marking unavailable")
                     span.set_attribute("claude.available", False)
                     return False
                 span.set_attribute("claude.available", True)
