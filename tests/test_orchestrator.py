@@ -10,6 +10,7 @@ from clayde.orchestrator import (
     _handle_new_issue,
     _handle_pr_open,
     _has_new_comments,
+    _prune_closed_issues,
     main,
 )
 
@@ -157,7 +158,7 @@ class TestMain:
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", side_effect=[state, recovered_state]), \
+             patch("clayde.orchestrator.load_state", side_effect=[state, state, recovered_state]), \
              patch("clayde.orchestrator.update_issue_state") as mock_update, \
              patch("clayde.orchestrator._handle_interrupted") as mock_handle:
             main()
@@ -455,3 +456,84 @@ class TestHasNewComments:
              patch("clayde.orchestrator.get_new_visible_comments", return_value=[]):
             entry = {"last_seen_comment_id": 100}
             assert _has_new_comments(g, "o", "r", 1, entry) is False
+
+
+class TestPruneClosedIssues:
+    def _make_issue_state(self, owner="o", repo="r", number=1):
+        return {"owner": owner, "repo": repo, "number": number}
+
+    def test_prunes_closed_issue(self):
+        g = MagicMock()
+        gh_issue = MagicMock()
+        gh_issue.state = "closed"
+        issues_state = {"https://github.com/o/r/issues/1": self._make_issue_state()}
+        with patch("clayde.orchestrator.fetch_issue", return_value=gh_issue), \
+             patch("clayde.orchestrator.load_state", return_value={"issues": dict(issues_state)}), \
+             patch("clayde.orchestrator.save_state") as mock_save:
+            _prune_closed_issues(g, issues_state)
+            saved = mock_save.call_args[0][0]
+            assert "https://github.com/o/r/issues/1" not in saved["issues"]
+
+    def test_keeps_open_issue(self):
+        g = MagicMock()
+        gh_issue = MagicMock()
+        gh_issue.state = "open"
+        issues_state = {"https://github.com/o/r/issues/1": self._make_issue_state()}
+        with patch("clayde.orchestrator.fetch_issue", return_value=gh_issue), \
+             patch("clayde.orchestrator.save_state") as mock_save:
+            _prune_closed_issues(g, issues_state)
+            mock_save.assert_not_called()
+
+    def test_skips_entry_missing_fields(self):
+        g = MagicMock()
+        issues_state = {"url1": {"status": "done"}}  # no owner/repo/number
+        with patch("clayde.orchestrator.fetch_issue") as mock_fetch, \
+             patch("clayde.orchestrator.save_state") as mock_save:
+            _prune_closed_issues(g, issues_state)
+            mock_fetch.assert_not_called()
+            mock_save.assert_not_called()
+
+    def test_skips_on_api_error(self):
+        g = MagicMock()
+        issues_state = {"https://github.com/o/r/issues/1": self._make_issue_state()}
+        with patch("clayde.orchestrator.fetch_issue", side_effect=Exception("API error")), \
+             patch("clayde.orchestrator.save_state") as mock_save:
+            _prune_closed_issues(g, issues_state)
+            mock_save.assert_not_called()
+
+    def test_prunes_multiple_closed_in_one_save(self):
+        g = MagicMock()
+        gh_issue = MagicMock()
+        gh_issue.state = "closed"
+        url1 = "https://github.com/o/r/issues/1"
+        url2 = "https://github.com/o/r/issues/2"
+        issues_state = {
+            url1: self._make_issue_state(number=1),
+            url2: self._make_issue_state(number=2),
+        }
+        with patch("clayde.orchestrator.fetch_issue", return_value=gh_issue), \
+             patch("clayde.orchestrator.load_state", return_value={"issues": dict(issues_state)}), \
+             patch("clayde.orchestrator.save_state") as mock_save:
+            _prune_closed_issues(g, issues_state)
+            # Only one save call (batched)
+            assert mock_save.call_count == 1
+            saved = mock_save.call_args[0][0]
+            assert url1 not in saved["issues"]
+            assert url2 not in saved["issues"]
+
+    def test_main_calls_prune(self):
+        """main() calls _prune_closed_issues before processing issues."""
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        state = {"issues": {}}
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
+             patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.get_github_client"), \
+             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
+             patch("clayde.orchestrator.load_state", return_value=state), \
+             patch("clayde.orchestrator._prune_closed_issues") as mock_prune, \
+             patch("clayde.orchestrator._handle_new_issue"):
+            main()
+            mock_prune.assert_called_once()

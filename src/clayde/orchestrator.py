@@ -37,7 +37,7 @@ from clayde.github import (
     parse_issue_url,
 )
 from clayde.safety import get_new_visible_comments, has_visible_content, is_plan_approved
-from clayde.state import IssueStatus, get_issue_state, load_state, update_issue_state
+from clayde.state import IssueStatus, get_issue_state, load_state, save_state, update_issue_state
 from clayde.tasks import implement, plan, review
 from clayde.telemetry import get_tracer, init_tracer
 
@@ -220,6 +220,31 @@ def _has_new_comments(g: Github, owner: str, repo: str, number: int, issue_state
     return bool(get_new_visible_comments(comments, last_seen))
 
 
+def _prune_closed_issues(g: Github, issues_state: dict) -> None:
+    """Remove closed issues from state to prevent stale entries accumulating."""
+    to_prune = []
+    for url, ist in issues_state.items():
+        owner = ist.get("owner")
+        repo = ist.get("repo")
+        number = ist.get("number")
+        if not owner or not repo or not number:
+            continue
+        try:
+            issue = fetch_issue(g, owner, repo, number)
+            if issue.state == "closed":
+                to_prune.append(url)
+        except Exception as e:
+            log.warning("[%s] Failed to check issue state for pruning: %s — skipping", _issue_label(ist), e)
+
+    if to_prune:
+        state = load_state()
+        for url in to_prune:
+            ist = issues_state[url]
+            log.info("[%s] Pruning closed issue from state", _issue_label(ist))
+            state["issues"].pop(url, None)
+        save_state(state)
+
+
 def main():
     settings = get_settings()
 
@@ -255,6 +280,12 @@ def main():
         issues_state = state.get("issues", {})
 
         tick_span.set_attribute("issues.assigned_count", len(assigned))
+
+        # Prune closed issues from state before any other processing
+        _prune_closed_issues(g, issues_state)
+
+        # Reload state after pruning
+        issues_state = load_state().get("issues", {})
 
         if not assigned:
             log.info("No assigned issues. Going back to sleep.")
