@@ -302,7 +302,10 @@ services:
     volumes:
       - ./data:/data
       - ~/.claude/.credentials.json:/home/clayde/.claude/.credentials.json
-      - ~/skills:/skills:ro
+      # Mount one or more skill dirs read-only. Paths must match
+      # CLAYDE_SKILL_DIRS in data/config.env. Example:
+      - ~/skills/personal:/skills/personal:ro
+      - ~/skills/shared:/skills/shared:ro
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
