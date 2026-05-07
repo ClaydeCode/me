@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     loop_interval_s: int = 300
     implement_max_retries: int = 3
 
+    # Pebble webhook
+    pebble_enabled: bool = False
+    pebble_token: str = ""
+    pebble_port: int = 8080
+    pebble_timeout: int = 600
+    pebble_queue_max: int = 100
+    pebble_host: str = ""
+
     @property
     def whitelisted_users_list(self) -> list[str]:
         return [u.strip() for u in self.whitelisted_users.split(",") if u.strip()]
