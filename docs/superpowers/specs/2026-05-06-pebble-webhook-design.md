@@ -130,20 +130,23 @@ description: Append a markdown note to the knowledge repo. Use when the user
 
 ### Discovery
 
-`CLAYDE_SKILL_DIRS` is a colon-separated list of directories inside the
-container. At startup AND on each request, every directory is scanned
-recursively for `*.md` files. Re-scanning per request is cheap and lets
-new skills be hot-added without restarting the container.
+Skills live under the fixed in-container path `/skills/`. The host mounts
+one or more subdirectories there read-only; subdirectory layout is free
+because discovery is fully recursive. No environment variable configures
+this — the path is hardcoded.
 
-The compose file mounts host skill directories read-only:
+Discovery happens on each request only (no startup scan). Walking the
+tree is cheap and lets new skills be hot-added by simply dropping a file
+into a mounted host directory — no container restart needed.
+
+The compose file mounts host skill directories read-only under
+`/skills/`:
 
 ```yaml
 volumes:
   - ./data:/data
   - ~/skills/personal:/skills/personal:ro
   - ~/skills/shared:/skills/shared:ro
-environment:
-  - CLAYDE_SKILL_DIRS=/skills/personal:/skills/shared
 ```
 
 ### Conflict resolution
@@ -152,8 +155,8 @@ If two skill files share a `name` field:
 
 1. Log a warning naming both paths.
 2. The first-discovered skill wins.
-3. Discovery order is deterministic: directories in `CLAYDE_SKILL_DIRS`
-   order, then alphabetical filename order within each directory.
+3. Discovery order is deterministic: alphabetical by full path under
+   `/skills/`.
 
 ### System prompt construction
 
@@ -179,8 +182,9 @@ Skill files:
 - add-note: /skills/personal/add-note.md
 - add-calendar-event: /skills/shared/add-calendar-event.md
 
-If no skill matches, respond with exactly "No matching skill" and stop. Do
-not invent or improvise.
+Choose AT MOST ONE skill per command. If no skill matches, respond with
+exactly "No matching skill" and stop. Do not invent or improvise. Do not
+chain multiple skills.
 
 User said (timestamp <ts>):
 <text>
@@ -262,24 +266,42 @@ New environment variables in `data/config.env`:
 | `CLAYDE_PEBBLE_PORT`       | Internal HTTP port                   | `8080`                      |
 | `CLAYDE_PEBBLE_TIMEOUT`    | CLI timeout (seconds)                | `600`                       |
 | `CLAYDE_PEBBLE_QUEUE_MAX`  | Queue capacity                       | `100`                       |
-| `CLAYDE_SKILL_DIRS`        | Colon-separated skill dirs           | (required when enabled)     |
 | `CLAYDE_PEBBLE_HOST`       | Public hostname (Traefik routing)    | (required when enabled)     |
+
+Skill location is *not* configurable — it is hardcoded to `/skills/`.
+Mount host skill directories under that path in `docker-compose.yml`,
+e.g. `~/skills/personal:/skills/personal:ro`. See *Deployment* below.
 
 `config.env.template` is updated with the new keys.
 
 ## Deployment
 
-`docker-compose.yml` gains a Traefik service and routing labels on the
-`clayde` service:
+`docker-compose.yml` gains a Traefik service, an internal-only network,
+and routing labels on the `clayde` service.
+
+Network design: two networks. `web` is the default bridge — only Traefik
+is attached here, and only Traefik publishes ports to the host (80, 443).
+`internal` is a private bridge with no host port mappings — both Traefik
+and `clayde` join it, and Traefik reaches `clayde:8080` over this
+network. `clayde` is **not** attached to `web`, so its FastAPI port is
+unreachable from the host or the internet — the only ingress path is
+through Traefik.
 
 ```yaml
+networks:
+  web:
+  internal:
+    internal: false  # outbound internet still required for git/gh/claude
+
 services:
   traefik:
     image: traefik:v3
     restart: unless-stopped
+    networks: [web, internal]
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=internal
       - --entrypoints.websecure.address=:443
       - --entrypoints.web.address=:80
       - --certificatesresolvers.le.acme.email=${CLAYDE_GIT_EMAIL}
@@ -297,13 +319,14 @@ services:
 
   clayde:
     # ...existing config...
+    networks: [internal]
     expose:
       - "8080"
     volumes:
       - ./data:/data
       - ~/.claude/.credentials.json:/home/clayde/.claude/.credentials.json
-      # Mount one or more skill dirs read-only. Paths must match
-      # CLAYDE_SKILL_DIRS in data/config.env. Example:
+      # Mount one or more skill dirs read-only under /skills/.
+      # Subdirectory layout is free — discovery is recursive.
       - ~/skills/personal:/skills/personal:ro
       - ~/skills/shared:/skills/shared:ro
     labels:
@@ -314,6 +337,12 @@ services:
       - "traefik.http.routers.clayde.tls.certresolver=le"
       - "traefik.http.services.clayde.loadbalancer.server.port=8080"
 ```
+
+Note on the `internal` network: it is **not** marked `internal: true`,
+because `clayde` still needs outbound internet for git, the GitHub API,
+and the Claude CLI. Marking it `internal: true` would block egress.
+Privacy comes from the absence of *ingress* port mappings on the
+`clayde` service, not from network-level isolation.
 
 The `clayde` console entry point is updated. When
 `CLAYDE_PEBBLE_ENABLED=true`, the entry point composes the existing loop
