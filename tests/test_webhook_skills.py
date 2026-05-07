@@ -95,3 +95,36 @@ def test_discover_skips_malformed(tmp_path, caplog):
 def test_discover_missing_root(tmp_path):
     missing = tmp_path / "does-not-exist"
     assert discover_skills(missing) == []
+
+
+from clayde.webhook.skills import build_system_prompt, build_user_prompt
+
+
+def test_build_system_prompt_with_skills():
+    skills = [
+        Skill(name="add-note", description="Save a note.", path=Path("/skills/personal/add-note.md")),
+        Skill(name="add-event", description="Create a calendar event.", path=Path("/skills/shared/cal.md")),
+    ]
+    prompt = build_system_prompt(skills)
+    assert "Pebble watch" in prompt
+    assert "speech-to-text" in prompt
+    assert "phonetically similar" in prompt
+    assert "- add-note: Save a note." in prompt
+    assert "- add-event: Create a calendar event." in prompt
+    assert "/skills/personal/add-note.md" in prompt
+    assert "/skills/shared/cal.md" in prompt
+    assert "AT MOST ONE skill" in prompt
+    assert 'respond with\nexactly "No matching skill"' in prompt or '"No matching skill"' in prompt
+
+
+def test_build_system_prompt_empty_catalog():
+    prompt = build_system_prompt([])
+    assert "(no skills available)" in prompt
+    assert 'respond with' in prompt
+    assert "No matching skill" in prompt
+
+
+def test_build_user_prompt():
+    out = build_user_prompt("hello world", 1778068506)
+    assert "1778068506" in out
+    assert "hello world" in out

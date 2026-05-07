@@ -41,6 +41,43 @@ def _parse_skill(path: Path) -> Skill:
     return Skill(name=name, description=desc, path=path)
 
 
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are Clayde, acting on a voice command from the user via a Pebble watch.
+
+The text you receive is speech-to-text output. It MAY contain transcription
+errors. Consider phonetically similar words and the most likely intent —
+e.g. "calendar" might arrive as "colander". Use judgement.
+
+{skill_section}
+
+Choose AT MOST ONE skill per command. If no skill matches, respond with
+exactly "No matching skill" and stop. Do not invent or improvise. Do not
+chain multiple skills.
+"""
+
+
+def build_system_prompt(skills: list[Skill]) -> str:
+    """Build the system prompt sent to the Claude CLI for a Pebble request."""
+    if not skills:
+        skill_section = "Available skills: (no skills available)"
+    else:
+        catalog = "\n".join(f"- {s.name}: {s.description}" for s in skills)
+        files = "\n".join(f"- {s.name}: {s.path}" for s in skills)
+        skill_section = (
+            "Available skills:\n\n"
+            f"{catalog}\n\n"
+            "To use a skill, read the full file at the path noted, then follow it.\n"
+            "Skill files:\n\n"
+            f"{files}"
+        )
+    return _SYSTEM_PROMPT_TEMPLATE.format(skill_section=skill_section)
+
+
+def build_user_prompt(text: str, timestamp: int) -> str:
+    """Build the user prompt (passed to ``claude -p``) for a Pebble request."""
+    return f"(timestamp {timestamp})\n{text}"
+
+
 def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
     """Recursively discover all skills under ``root``.
 
