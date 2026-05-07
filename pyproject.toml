@@ -27,6 +27,7 @@ clayde-ctl = "clayde.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["hatchling"]
