@@ -39,3 +39,31 @@ def _parse_skill(path: Path) -> Skill:
     if not isinstance(name, str) or not isinstance(desc, str) or not name or not desc:
         raise ValueError(f"name and description required in frontmatter of {path}")
     return Skill(name=name, description=desc, path=path)
+
+
+def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
+    """Recursively discover all skills under ``root``.
+
+    Returns a list ordered alphabetically by full path. On duplicate
+    ``name`` fields, the first-discovered skill wins; subsequent
+    duplicates are logged at WARNING and ignored. Malformed files are
+    logged at WARNING and skipped.
+    """
+    if not root.exists():
+        return []
+    files = sorted(root.rglob("*.md"))
+    seen: dict[str, Skill] = {}
+    for path in files:
+        try:
+            skill = _parse_skill(path)
+        except (ValueError, OSError) as e:
+            log.warning("Failed to parse skill %s: %s", path, e)
+            continue
+        if skill.name in seen:
+            log.warning(
+                "Duplicate skill name %r — keeping %s, ignoring %s",
+                skill.name, seen[skill.name].path, path,
+            )
+            continue
+        seen[skill.name] = skill
+    return list(seen.values())
