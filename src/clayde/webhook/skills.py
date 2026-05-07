@@ -32,6 +32,10 @@ def _parse_skill(path: Path) -> Skill:
     data = yaml.safe_load(fm_text) or {}
     name = data.get("name")
     desc = data.get("description")
+    if isinstance(name, str):
+        name = name.strip()
+    if isinstance(desc, str):
+        desc = desc.strip()
     if not isinstance(name, str) or not isinstance(desc, str) or not name or not desc:
         raise ValueError(f"name and description required in frontmatter of {path}")
-    return Skill(name=name.strip(), description=desc.strip(), path=path)
+    return Skill(name=name, description=desc, path=path)

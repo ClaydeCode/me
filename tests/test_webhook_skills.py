@@ -45,3 +45,15 @@ def test_parse_skill_missing_description(tmp_path):
     p = _write(tmp_path / "broken.md", "---\nname: only-a-name\n---\n\nBody.\n")
     with pytest.raises(ValueError, match="name and description required"):
         _parse_skill(p)
+
+
+def test_parse_skill_whitespace_only_name(tmp_path):
+    p = _write(tmp_path / "broken.md", "---\nname: \"   \"\ndescription: real desc\n---\n\nBody.\n")
+    with pytest.raises(ValueError, match="name and description required"):
+        _parse_skill(p)
+
+
+def test_parse_skill_whitespace_only_description(tmp_path):
+    p = _write(tmp_path / "broken.md", "---\nname: real-name\ndescription: \"   \"\n---\n\nBody.\n")
+    with pytest.raises(ValueError, match="name and description required"):
+        _parse_skill(p)
