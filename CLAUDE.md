@@ -73,6 +73,14 @@ src/clayde/
     plan.py             # run_preliminary(url), run_thorough(url), run_update(url, phase)
     implement.py        # run(issue_url) — implement + open PR + assign reviewer
     review.py           # run(issue_url) — address PR review comments
+  webhook/
+    __init__.py
+    app.py              # FastAPI app, /webhook/pebble, /health, OTel enqueue span
+    auth.py             # constant-time bearer-token verification
+    queue.py            # PebbleJob, JobQueue (in-memory asyncio.Queue), QueueFullError
+    runner.py           # invoke_claude_pebble — async CLI subprocess, fresh session
+    skills.py           # Skill model, /skills/ discovery, system + user prompt builders
+    worker.py           # worker_loop, process_job — pop jobs, OTel process span
 
 # Container paths
 /opt/clayde/            # application code (WORKDIR)
@@ -103,6 +111,12 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key for Claude SDK calls (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
 | `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` — selects Anthropic SDK or Claude Code CLI |
+| `CLAYDE_PEBBLE_ENABLED` | Set to `true` to enable the Pebble webhook |
+| `CLAYDE_PEBBLE_TOKEN` | Bearer token the Pebble app sends |
+| `CLAYDE_PEBBLE_HOST` | Public hostname for Traefik routing |
+| `CLAYDE_PEBBLE_PORT` | Internal HTTP port (default 8080) |
+| `CLAYDE_PEBBLE_TIMEOUT` | Per-request CLI timeout seconds (default 600) |
+| `CLAYDE_PEBBLE_QUEUE_MAX` | Max queued jobs before 503 (default 100) |
 
 Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at startup for the `gh` CLI.
 
@@ -284,6 +298,45 @@ Handles PR review comments after implementation:
 Format: `[YYYY-MM-DD HH:MM:SS] [clayde.<module>] <message>`
 File: `/data/logs/agent.log` (appended)
 Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.tasks.review`, `clayde.github`, `clayde.claude`
+
+---
+
+## Pebble Webhook
+
+When `CLAYDE_PEBBLE_ENABLED=true`, the container also serves a FastAPI
+webhook for a Pebble watch app, alongside the existing GitHub poll loop
+(both run on the same asyncio event loop).
+
+- `POST /webhook/pebble` — accepts `{"text": str, "timestamp": int}` with
+  `Authorization: Bearer <CLAYDE_PEBBLE_TOKEN>`. Returns 200 with a job id.
+- `GET /health` — liveness probe (no auth).
+
+The text is dispatched to the Claude CLI with a system prompt listing
+*skills* found under the in-container path `/skills/`. Each skill is a
+single markdown file with frontmatter:
+
+```markdown
+---
+name: my-skill
+description: One-line description used in skill catalog.
+---
+
+(Body: instructions for Claude.)
+```
+
+Mount one or more host directories read-only under `/skills/` in
+`docker-compose.yml`. Discovery is recursive; subdirectory layout is
+free. Duplicate `name` fields are logged and only the first-discovered
+skill is used.
+
+Claude must pick AT MOST ONE skill per request, or respond exactly
+"No matching skill". Each request gets a fresh `claude` session — no
+context carries between requests.
+
+Traefik handles TLS (Let's Encrypt) and routes
+`https://<CLAYDE_PEBBLE_HOST>/webhook/pebble` over a private docker
+network. The `clayde` service is not attached to any externally-reachable
+network — the only ingress path is through Traefik.
 
 ---
 
