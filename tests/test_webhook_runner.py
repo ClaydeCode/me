@@ -82,3 +82,55 @@ async def test_runner_returns_no_match_unchanged(fake_subproc, tmp_path):
         system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
     )
     assert out == "No matching skill"
+
+
+async def test_runner_raises_usage_limit_on_is_error_output(fake_subproc, tmp_path):
+    """When is_error=True and the limit pattern appears in result (not stderr),
+    UsageLimitError must still be raised."""
+    fake_subproc["proc"] = _FakeProc(
+        stdout=json.dumps({"result": "you hit your usage limit", "is_error": True}).encode(),
+        stderr=b"",
+        returncode=1,
+    )
+    with pytest.raises(UsageLimitError):
+        await runner.invoke_claude_pebble(
+            system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
+        )
+
+
+async def test_runner_raises_runtime_error_on_auth_failure(fake_subproc, tmp_path):
+    fake_subproc["proc"] = _FakeProc(
+        stdout=b"{}",
+        stderr=b"failed to authenticate",
+        returncode=1,
+    )
+    with pytest.raises(RuntimeError, match="authentication failed"):
+        await runner.invoke_claude_pebble(
+            system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
+        )
+
+
+async def test_runner_kills_proc_on_external_cancel(fake_subproc, tmp_path):
+    """If the runner coroutine is externally cancelled mid-communicate,
+    the subprocess must be killed and reaped."""
+    proc = _FakeProc(b"")
+
+    started = asyncio.Event()
+
+    async def hanging_communicate():
+        started.set()
+        await asyncio.sleep(60)
+
+    proc.communicate = hanging_communicate
+    fake_subproc["proc"] = proc
+
+    task = asyncio.create_task(
+        runner.invoke_claude_pebble(
+            system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=60,
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    proc.kill.assert_called_once()

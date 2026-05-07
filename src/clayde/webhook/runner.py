@@ -44,15 +44,24 @@ async def invoke_claude_pebble(
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout_b, stderr_b = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout_s,
-        )
-    except asyncio.TimeoutError as e:
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_s,
+            )
+        except asyncio.TimeoutError as e:
+            raise InvocationTimeoutError(
+                f"Claude CLI timed out after {timeout_s}s"
+            ) from e
+    except BaseException:
+        # Ensure the subprocess is reaped on any exit path (timeout or
+        # caller cancellation). Killing an already-exited process is a
+        # no-op on POSIX.
         proc.kill()
-        await proc.wait()
-        raise InvocationTimeoutError(
-            f"Claude CLI timed out after {timeout_s}s"
-        ) from e
+        try:
+            await proc.wait()
+        except BaseException:
+            pass
+        raise
 
     stdout = stdout_b.decode("utf-8", errors="replace")
     stderr = stderr_b.decode("utf-8", errors="replace")
