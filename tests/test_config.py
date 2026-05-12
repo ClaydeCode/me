@@ -125,3 +125,16 @@ class TestSetupLogging:
                 logger.removeHandler(h)
                 h.close()
         _reset_settings()
+
+
+def test_pebble_settings_defaults(monkeypatch, tmp_path):
+    from clayde.config import Settings, _reset_settings
+    monkeypatch.setattr("clayde.config.DATA_DIR", tmp_path)
+    _reset_settings()
+    s = Settings(_env_file=None)
+    assert s.pebble_enabled is False
+    assert s.pebble_token == ""
+    assert s.pebble_port == 8080
+    assert s.pebble_timeout == 600
+    assert s.pebble_queue_max == 100
+    assert s.pebble_host == ""

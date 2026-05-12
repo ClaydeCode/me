@@ -198,3 +198,37 @@ In any repository the bot has access to, assign issues to the bot account. Clayd
 | `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` |
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
+| `CLAYDE_PEBBLE_ENABLED` | Set to `true` to enable the Pebble webhook |
+| `CLAYDE_PEBBLE_TOKEN` | Bearer token the Pebble app sends |
+| `CLAYDE_PEBBLE_HOST` | Public hostname for Traefik routing |
+| `CLAYDE_PEBBLE_PORT` | Internal HTTP port (default `8080`) |
+| `CLAYDE_PEBBLE_TIMEOUT` | Per-request CLI timeout seconds (default `600`) |
+| `CLAYDE_PEBBLE_QUEUE_MAX` | Max queued jobs before 503 (default `100`) |
+
+---
+
+## Pebble Watch Integration
+
+Clayde can also receive voice commands from a Pebble watch app via an
+HTTPS webhook. When enabled, the container additionally serves a FastAPI
+endpoint alongside the existing GitHub poll loop.
+
+To enable:
+
+1. Set `CLAYDE_PEBBLE_ENABLED=true` and a strong random
+   `CLAYDE_PEBBLE_TOKEN` in `data/config.env`.
+2. Set `CLAYDE_PEBBLE_HOST` to the public hostname Traefik should serve
+   (e.g. `clayde.example.com`). The hostname must resolve to the host's
+   public IP and ports `80` + `443` must be open for Let's Encrypt
+   HTTP-01 challenges.
+3. Mount one or more skill directories under `/skills/` in
+   `docker-compose.yml`. Each skill is a markdown file with frontmatter
+   `name` and `description` (see `CLAUDE.md` for the full format).
+4. Configure the Pebble app to POST to
+   `https://<CLAYDE_PEBBLE_HOST>/webhook/pebble` with the bearer token.
+
+The webhook is fire-and-forget: requests return `200` with a job id and
+work happens asynchronously in a single serial worker. Each request
+spawns a fresh Claude CLI session (no context carries between requests)
+and the system prompt instructs Claude to choose at most one matching
+skill or respond `"No matching skill"`.

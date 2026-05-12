@@ -537,3 +537,46 @@ class TestPruneClosedIssues:
              patch("clayde.orchestrator._handle_new_issue"):
             main()
             mock_prune.assert_called_once()
+
+
+def test_run_loop_without_pebble_uses_legacy_path(monkeypatch):
+    """When pebble_enabled is False, run_loop must use the existing sync path."""
+    from clayde import orchestrator
+
+    calls = []
+    monkeypatch.setattr(orchestrator, "main", lambda: calls.append("tick"))
+    monkeypatch.setattr(orchestrator, "_shutdown", True)  # exit after first iteration
+    monkeypatch.setattr(orchestrator, "setup_logging", lambda: None)
+
+    class _S:
+        loop_interval_s = 0
+        pebble_enabled = False
+
+    monkeypatch.setattr(orchestrator, "get_settings", lambda: _S())
+    orchestrator.run_loop()
+    # _shutdown=True from start means main() never runs; that's fine — the
+    # important assertion is no exception and no asyncio.run call.
+
+
+def test_run_loop_with_pebble_invokes_async_entry(monkeypatch):
+    """When pebble_enabled is True, run_loop must hand off to the async entry."""
+    from clayde import orchestrator
+
+    invoked = {}
+
+    async def fake_async_main():
+        invoked["called"] = True
+
+    monkeypatch.setattr(orchestrator, "_run_with_pebble", fake_async_main)
+
+    class _S:
+        loop_interval_s = 0
+        pebble_enabled = True
+        pebble_token = "x"
+        pebble_port = 8080
+        pebble_timeout = 10
+        pebble_queue_max = 2
+
+    monkeypatch.setattr(orchestrator, "get_settings", lambda: _S())
+    orchestrator.run_loop()
+    assert invoked.get("called") is True

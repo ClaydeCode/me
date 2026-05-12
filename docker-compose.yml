@@ -1,16 +1,55 @@
+networks:
+  web:
+  internal:
+
 services:
+  traefik:
+    image: traefik:v3
+    restart: unless-stopped
+    networks: [web, internal]
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=internal
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.address=:80
+      - --certificatesresolvers.le.acme.email=${CLAYDE_GIT_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data/letsencrypt:/letsencrypt
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
   clayde:
     image: ghcr.io/claydecode/me:main
     restart: unless-stopped
     user: "1000:1000"
+    networks: [internal]
+    expose:
+      - "8080"
     environment:
       - CLAYDE_ENABLED=true
     volumes:
       - ./data:/data
       # Mount Claude CLI OAuth credentials (required when CLAYDE_CLAUDE_BACKEND=cli)
       - ~/.claude/.credentials.json:/home/clayde/.claude/.credentials.json
+      # Pebble skill directories — mount one or more host dirs read-only
+      # under /skills/. Subdirectory layout is free; discovery is recursive.
+      - ~/skills/personal:/skills/personal:ro
+      - ~/skills/shared:/skills/shared:ro
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.clayde.rule=Host(`${CLAYDE_PEBBLE_HOST}`) && PathPrefix(`/webhook`)"
+      - "traefik.http.routers.clayde.entrypoints=websecure"
+      - "traefik.http.routers.clayde.tls.certresolver=le"
+      - "traefik.http.services.clayde.loadbalancer.server.port=8080"
 
   watchtower:
     image: containrrr/watchtower

@@ -12,6 +12,7 @@ Entry points:
   run_loop()  — continuous loop with configurable sleep interval (container mode)
 """
 
+import asyncio
 import logging
 import os
 import signal
@@ -20,6 +21,7 @@ import sys
 import time
 from datetime import datetime
 
+import uvicorn
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
@@ -28,6 +30,7 @@ from github.Issue import Issue
 
 from clayde.claude import is_claude_available
 from clayde.config import get_github_client, get_settings, setup_logging
+from clayde.webhook import JobQueue, create_app, worker_loop
 from clayde.github import (
     fetch_issue,
     fetch_issue_comments,
@@ -353,17 +356,61 @@ def _handle_signal(signum, frame):
     log.info("Received signal %s — will shut down after current cycle", signum)
 
 
+async def _run_with_pebble() -> None:
+    """Async entry point that runs the GitHub tick loop, the Pebble webhook,
+    and the Pebble worker concurrently.
+    """
+    setup_logging()
+    settings = get_settings()
+    interval = settings.loop_interval_s
+    log.info(
+        "Starting Clayde with Pebble webhook (port=%d, queue_max=%d)",
+        settings.pebble_port, settings.pebble_queue_max,
+    )
+
+    queue = JobQueue(maxsize=settings.pebble_queue_max)
+    app = create_app(queue=queue, expected_token=settings.pebble_token)
+    config = uvicorn.Config(
+        app, host="0.0.0.0", port=settings.pebble_port,
+        log_level="info", access_log=False, lifespan="off",
+    )
+    server = uvicorn.Server(config)
+
+    async def tick_loop() -> None:
+        while not _shutdown:
+            try:
+                await asyncio.to_thread(main)
+            except SystemExit:
+                pass
+            except Exception:
+                log.exception("Unhandled error in main loop")
+            for _ in range(interval):
+                if _shutdown:
+                    break
+                await asyncio.sleep(1)
+
+    async def worker_task() -> None:
+        await worker_loop(queue, timeout_s=settings.pebble_timeout)
+
+    await asyncio.gather(server.serve(), tick_loop(), worker_task())
+
+
 def run_loop():
     """Run main() in a loop with a configurable sleep interval.
 
-    This is the container entry point. Handles SIGTERM/SIGINT for graceful
-    shutdown and guarantees no overlapping work sessions.
+    This is the container entry point. When ``pebble_enabled`` is true,
+    also serves the Pebble webhook + worker on the same event loop.
     """
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
+    settings = get_settings()
+    if settings.pebble_enabled:
+        asyncio.run(_run_with_pebble())
+        return
+
     setup_logging()
-    interval = get_settings().loop_interval_s
+    interval = settings.loop_interval_s
     log.info("Starting Clayde loop (interval=%ds)", interval)
 
     while not _shutdown:
