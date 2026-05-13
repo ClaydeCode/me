@@ -46,9 +46,17 @@ class Settings(BaseSettings):
     pebble_enabled: bool = False
     pebble_token: str = ""
     pebble_port: int = 8080
-    pebble_timeout: int = 600
+    pebble_timeout: int = 300
     pebble_queue_max: int = 100
     pebble_host: str = ""
+
+    # ntfy notifications (Pebble outcome feedback)
+    ntfy_topic: str = "7yuau0vyes"
+    ntfy_base_url: str = "https://ntfy.sh"
+    ntfy_timeout_s: int = 10
+
+    # Knowledge base (default cwd for Pebble runs)
+    kb_path: str = "/home/clayde/knowledge_base"
 
     @property
     def whitelisted_users_list(self) -> list[str]:
