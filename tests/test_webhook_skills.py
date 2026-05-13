@@ -158,3 +158,19 @@ def test_prompt_when_no_skills_still_invites_judgement():
     from clayde.webhook.skills import build_system_prompt
     p = build_system_prompt([])
     assert "judgement" in p.lower() or "judgment" in p.lower()
+
+
+def test_discovers_builtin_alongside_host(tmp_path):
+    from clayde.webhook.skills import discover_skills
+    # Simulate the in-container layout: /skills/builtin + /skills/personal.
+    (tmp_path / "builtin").mkdir()
+    (tmp_path / "personal").mkdir()
+    (tmp_path / "builtin" / "ping.md").write_text(
+        "---\nname: ping\ndescription: Health check.\n---\n\npong\n"
+    )
+    (tmp_path / "personal" / "add-note.md").write_text(
+        "---\nname: add-note\ndescription: Save a note.\n---\n\n...\n"
+    )
+    skills = discover_skills(tmp_path)
+    names = {s.name for s in skills}
+    assert names == {"ping", "add-note"}
