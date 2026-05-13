@@ -390,7 +390,11 @@ async def _run_with_pebble() -> None:
                 await asyncio.sleep(1)
 
     async def worker_task() -> None:
-        await worker_loop(queue, timeout_s=settings.pebble_timeout)
+        await worker_loop(
+            queue,
+            timeout_s=settings.pebble_timeout,
+            kb_path=settings.kb_path,
+        )
 
     await asyncio.gather(server.serve(), tick_loop(), worker_task())
 
