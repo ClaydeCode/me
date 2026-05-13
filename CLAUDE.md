@@ -77,10 +77,13 @@ src/clayde/
     __init__.py
     app.py              # FastAPI app, /webhook/pebble, /health, OTel enqueue span
     auth.py             # constant-time bearer-token verification
+    notify.py           # send_ntfy + NotificationPayload model
     queue.py            # PebbleJob, JobQueue (in-memory asyncio.Queue), QueueFullError
     runner.py           # invoke_claude_pebble — async CLI subprocess, fresh session
     skills.py           # Skill model, /skills/ discovery, system + user prompt builders
     worker.py           # worker_loop, process_job — pop jobs, OTel process span
+  skills_builtin/
+    ping.md             # built-in health-check skill (baked into image)
 
 # Container paths
 /opt/clayde/            # application code (WORKDIR)
@@ -115,8 +118,12 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 | `CLAYDE_PEBBLE_TOKEN` | Bearer token the Pebble app sends |
 | `CLAYDE_PEBBLE_HOST` | Public hostname for Traefik routing |
 | `CLAYDE_PEBBLE_PORT` | Internal HTTP port (default 8080) |
-| `CLAYDE_PEBBLE_TIMEOUT` | Per-request CLI timeout seconds (default 600) |
+| `CLAYDE_PEBBLE_TIMEOUT` | Per-request CLI timeout seconds (default 300) |
 | `CLAYDE_PEBBLE_QUEUE_MAX` | Max queued jobs before 503 (default 100) |
+| `CLAYDE_NTFY_TOPIC` | ntfy.sh topic for Pebble outcome notifications |
+| `CLAYDE_NTFY_BASE_URL` | ntfy base URL (override for self-host) |
+| `CLAYDE_NTFY_TIMEOUT_S` | ntfy POST timeout seconds (default 10) |
+| `CLAYDE_KB_PATH` | In-container KB path; Pebble per-request cwd (default `/home/clayde/knowledge_base`) |
 
 Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at startup for the `gh` CLI.
 
@@ -313,25 +320,26 @@ webhook for a Pebble watch app, alongside the existing GitHub poll loop
 
 The text is dispatched to the Claude CLI with a system prompt listing
 *skills* found under the in-container path `/skills/`. Each skill is a
-single markdown file with frontmatter:
+single markdown file with `name` + `description` frontmatter. Built-in
+skills live at `/skills/builtin/` (baked into the image — currently
+`ping`); host-mounted skill directories sit alongside (e.g.
+`/skills/personal/`, `/skills/shared/`).
 
-```markdown
----
-name: my-skill
-description: One-line description used in skill catalog.
----
+Claude is free to use any number of skills per request — there is no
+single-skill cap. If no skill fits, Claude uses judgement (typically
+capturing into the knowledge base inbox).
 
-(Body: instructions for Claude.)
-```
+Per-request `cwd` is `${CLAYDE_KB_PATH}` (default
+`/home/clayde/knowledge_base`), mounted RW from the host
+`~/knowledge_base/`. Sync to other devices is handled by Syncthing on
+the host — the container performs no `git` operations against the KB.
 
-Mount one or more host directories read-only under `/skills/` in
-`docker-compose.yml`. Discovery is recursive; subdirectory layout is
-free. Duplicate `name` fields are logged and only the first-discovered
-skill is used.
-
-Claude must pick AT MOST ONE skill per request, or respond exactly
-"No matching skill". Each request gets a fresh `claude` session — no
-context carries between requests.
+Every terminal outcome (success, claude-reported failure, timeout, usage
+limit, CLI error, auth error, worker exception, queue full) emits an ntfy
+notification on `${CLAYDE_NTFY_BASE_URL}/${CLAYDE_NTFY_TOPIC}`. Claude
+produces the title/body via a fenced JSON tail in its output; the
+framework falls back to a synthetic "no summary" payload when parsing
+fails.
 
 Traefik handles TLS (Let's Encrypt) and routes
 `https://<CLAYDE_PEBBLE_HOST>/webhook/pebble` over a private docker
