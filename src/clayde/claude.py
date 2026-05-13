@@ -82,6 +82,19 @@ class InvocationTimeoutError(Exception):
         self.cost_eur = cost_eur
 
 
+class CliInvocationError(Exception):
+    """Raised when the Claude CLI exits non-zero and the error is not
+    recognized as an auth failure or usage-limit hit.
+
+    Attributes:
+        stderr: tail of the CLI's stderr (truncated, for safe display).
+    """
+
+    def __init__(self, stderr: str):
+        self.stderr = stderr
+        super().__init__(stderr[:200] if stderr else "claude CLI exited non-zero")
+
+
 def format_cost_line(cost_eur: float) -> str:
     """Format a cost line for inclusion in GitHub comments.
 

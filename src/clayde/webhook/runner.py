@@ -7,6 +7,7 @@ import json
 import logging
 
 from clayde.claude import (
+    CliInvocationError,
     InvocationTimeoutError,
     UsageLimitError,
     _is_auth_error,
@@ -25,7 +26,8 @@ async def invoke_claude_pebble(
 
     Always a fresh session — no resume, no session-id persistence.
     Raises ``InvocationTimeoutError`` on timeout, ``UsageLimitError`` on
-    rate/usage limits, ``RuntimeError`` on auth errors.
+    rate/usage limits, ``RuntimeError`` on auth errors, ``CliInvocationError``
+    on any other non-zero exit.
     """
     cli_bin = _resolve_cli_bin()
     cmd = [
@@ -87,5 +89,6 @@ async def invoke_claude_pebble(
             "Claude CLI exited rc=%d is_error=%s stderr=%s",
             proc.returncode, is_error, stderr[:500],
         )
+        raise CliInvocationError(stderr or output_text)
 
     return output_text

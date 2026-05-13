@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from clayde.claude import InvocationTimeoutError, UsageLimitError
+from clayde.claude import CliInvocationError, InvocationTimeoutError, UsageLimitError
 from clayde.webhook import runner
 
 
@@ -134,3 +134,24 @@ async def test_runner_kills_proc_on_external_cancel(fake_subproc, tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await task
     proc.kill.assert_called_once()
+
+
+async def test_runner_raises_cli_invocation_error_on_nonzero(fake_subproc, tmp_path):
+    fake_subproc["proc"] = _FakeProc(
+        stdout=b'{"result": "boom"}', stderr=b"boom on stderr", returncode=2,
+    )
+    with pytest.raises(CliInvocationError) as exc:
+        await runner.invoke_claude_pebble(
+            system_prompt="sys", user_text="hi", cwd=str(tmp_path), timeout_s=5,
+        )
+    assert "boom" in exc.value.stderr
+
+
+async def test_runner_returns_text_on_zero_exit(fake_subproc, tmp_path):
+    fake_subproc["proc"] = _FakeProc(
+        stdout=json.dumps({"result": "ok"}).encode(), stderr=b"", returncode=0,
+    )
+    out = await runner.invoke_claude_pebble(
+        system_prompt="sys", user_text="hi", cwd=str(tmp_path), timeout_s=5,
+    )
+    assert out == "ok"
