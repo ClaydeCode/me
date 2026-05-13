@@ -59,9 +59,10 @@ Notifications fire on **terminal events only**. One notification per webhook cal
 | Worker, CLI success + JSON parsed | normal completion | `payload.title` | `payload.body` |
 | Worker, CLI success + JSON missing/malformed | parse fallback | `Pebble: done (no summary)` | first 300 chars of CLI `result` |
 | Worker, CLI returns `success: false` JSON | claude-reported failure | `payload.title` | `payload.body` (fail priority/tags) |
-| Worker, `TimeoutExpired` | hard timeout | `Pebble: timeout` | `ran <timeout>s+` |
+| Worker, `InvocationTimeoutError` | hard timeout (asyncio.wait_for) | `Pebble: timeout` | `ran <timeout>s+` |
 | Worker, `UsageLimitError` | Anthropic rate-limit | `Pebble: rate-limited` | `try again later` |
-| Worker, CLI non-zero exit | CLI error | `Pebble: failed` | stderr tail (≤300 chars) |
+| Worker, `CliInvocationError` (new) | CLI non-zero exit, not auth/limit | `Pebble: failed` | stderr tail (≤300 chars) |
+| Worker, `RuntimeError` from auth | CLI authentication failed | `Pebble: auth error` | `claude CLI auth` |
 | Worker, unexpected exception | worker error | `Pebble: failed` | exception class name |
 | FastAPI handler, `QueueFull` | queue saturated (503) | `Pebble: queue full` | text snippet + queued count |
 | FastAPI handler, worker dead | worker task crashed | `Pebble: worker dead` | exception class name |
@@ -82,14 +83,21 @@ try:
     await send_ntfy(title=payload.title, body=payload.body, success=payload.success)
 except UsageLimitError:
     await send_ntfy(title="Pebble: rate-limited", body="try again later", success=False)
-except TimeoutExpired:
+except InvocationTimeoutError:
     await send_ntfy(title="Pebble: timeout", body=f"ran {settings.pebble_timeout}s+", success=False)
-except subprocess.CalledProcessError as exc:
+except CliInvocationError as exc:
     await send_ntfy(title="Pebble: failed", body=_tail(exc.stderr, 300), success=False)
+except RuntimeError as exc:
+    # auth failures raise RuntimeError from existing runner
+    await send_ntfy(title="Pebble: auth error", body=str(exc)[:300], success=False)
 except Exception as exc:
     log.exception("worker error")
     await send_ntfy(title="Pebble: failed", body=type(exc).__name__, success=False)
 ```
+
+### Runner change required
+
+Phase-1 `invoke_claude_pebble` does not raise on CLI non-zero exit unless the stderr matches an auth or usage-limit pattern — it logs and returns the output text. Phase 2 introduces a new exception `CliInvocationError(stderr: str)` in `clayde.claude` and modifies the runner to raise it when `proc.returncode != 0 or is_error` and the error is not recognized as auth/limit. This is required so the worker can distinguish CLI failure from success — otherwise the JSON-tail parser would treat a failed run as a "no summary" success.
 
 The worker loop itself catches everything and survives — same invariant as phase 1.
 
@@ -104,7 +112,7 @@ The text is speech-to-text output. It MAY contain transcription errors.
 Consider phonetically similar words and the most likely intent — e.g.
 "calendar" might arrive as "colander".
 
-Default working target: ~/knowledge_base (mounted RW, synced via Syncthing).
+Default working target: /home/clayde/knowledge_base (mounted RW, synced via Syncthing).
 If the command implies "remember this", "note", "save", "log", "capture",
 write a file there. No git operations — Syncthing handles sync.
 
@@ -219,9 +227,11 @@ tests/
 ### Modified files
 
 ```
-src/clayde/webhook/runner.py   # JSON-tail extraction, KB cwd, no scratch dir
+src/clayde/claude.py           # new CliInvocationError exception class
+src/clayde/webhook/runner.py   # raise CliInvocationError on rc!=0; KB cwd; no scratch dir;
+                               # new extract_notification_payload(result) helper
 src/clayde/webhook/skills.py   # builtin path discovery; new system-prompt builder
-src/clayde/webhook/worker.py   # send_ntfy on every terminal outcome
+src/clayde/webhook/worker.py   # send_ntfy on every terminal outcome (calls runner parser)
 src/clayde/webhook/app.py      # send_ntfy on QueueFull / worker-dead
 src/clayde/config.py           # new Settings fields
 config.env.template            # document new env vars
