@@ -65,7 +65,15 @@ def test_pebble_rejects_bad_payload(client):
     assert r.status_code == 422
 
 
-def test_pebble_returns_503_when_full(queue):
+def test_pebble_returns_503_when_full(queue, monkeypatch):
+    # Stub the ntfy dispatcher so the 503 branch does not hit the real network.
+    from clayde.webhook import app as app_mod
+
+    async def _noop(**_):
+        return None
+
+    monkeypatch.setattr(app_mod, "send_ntfy", _noop)
+
     # Fill the queue using a smaller capacity so 503 is reachable.
     small = JobQueue(maxsize=1)
     app = create_app(queue=small, expected_token="t")
