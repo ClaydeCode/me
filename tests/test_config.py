@@ -135,6 +135,26 @@ def test_pebble_settings_defaults(monkeypatch, tmp_path):
     assert s.pebble_enabled is False
     assert s.pebble_token == ""
     assert s.pebble_port == 8080
-    assert s.pebble_timeout == 600
+    assert s.pebble_timeout == 300
     assert s.pebble_queue_max == 100
     assert s.pebble_host == ""
+
+
+def test_pebble_timeout_default_is_300():
+    from clayde.config import Settings
+    s = Settings(_env_file=None)
+    assert s.pebble_timeout == 300
+
+
+def test_ntfy_defaults():
+    from clayde.config import Settings
+    s = Settings(_env_file=None)
+    assert s.ntfy_topic == "7yuau0vyes"
+    assert s.ntfy_base_url == "https://ntfy.sh"
+    assert s.ntfy_timeout_s == 10
+
+
+def test_kb_path_default():
+    from clayde.config import Settings
+    s = Settings(_env_file=None)
+    assert s.kb_path == "/home/clayde/knowledge_base"

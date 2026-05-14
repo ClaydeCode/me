@@ -9,8 +9,10 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from clayde.config import get_settings
 from clayde.telemetry import get_tracer
 from clayde.webhook.auth import verify_bearer
+from clayde.webhook.notify import send_ntfy
 from clayde.webhook.queue import JobQueue, PebbleJob, QueueFullError
 
 log = logging.getLogger("clayde.webhook")
@@ -50,6 +52,15 @@ def create_app(*, queue: JobQueue, expected_token: str) -> FastAPI:
             except QueueFullError:
                 span.set_attribute("http.status_code", 503)
                 log.warning("[%s] queue full — rejecting", job_id)
+                settings = get_settings()
+                await send_ntfy(
+                    title="Pebble: queue full",
+                    body=f"text: {payload.text[:200]}",
+                    success=False,
+                    base_url=settings.ntfy_base_url,
+                    topic=settings.ntfy_topic,
+                    timeout_s=settings.ntfy_timeout_s,
+                )
                 return JSONResponse(
                     status_code=503,
                     content={"queued": False, "reason": "full"},

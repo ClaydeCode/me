@@ -42,32 +42,47 @@ def _parse_skill(path: Path) -> Skill:
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are Clayde, acting on a voice command from the user via a Pebble watch.
+You are Clayde, executing a voice command from the user via a Pebble watch.
 
 The text you receive is speech-to-text output. It MAY contain transcription
 errors. Consider phonetically similar words and the most likely intent —
 e.g. "calendar" might arrive as "colander". Use judgement.
 
+Default working target: /home/clayde/knowledge_base (mounted RW, synced
+via Syncthing). If the command implies "remember this", "note", "save",
+"log", or "capture", write a file there. No git operations — Syncthing
+handles sync.
+
 {skill_section}
 
-Choose AT MOST ONE skill per command. If no skill matches, respond with
-exactly "No matching skill" and stop. Do not invent or improvise. Do not
-chain multiple skills.
+Skills are suggestions, not constraints. Use as many as the command needs,
+in any order. If no skill fits, use your judgement — capture into the
+knowledge base inbox or answer directly.
+
+When done, your LAST output MUST be a single fenced JSON block in this
+exact form:
+
+```json
+{{"title": "<short, max 40 chars>", "body": "<message, max 300 chars>", "success": true}}
+```
+
+Set `success` to false only if you could not carry out the user's intent.
+Anything before the JSON block is your working narrative and is ignored
+by the framework.
 """
 
 
 def build_system_prompt(skills: list[Skill]) -> str:
     """Build the system prompt sent to the Claude CLI for a Pebble request."""
     if not skills:
-        skill_section = "Available skills: (no skills available)"
+        skill_section = "Available skills: (none currently registered)"
     else:
         catalog = "\n".join(f"- {s.name}: {s.description}" for s in skills)
         files = "\n".join(f"- {s.name}: {s.path}" for s in skills)
         skill_section = (
-            "Available skills:\n\n"
+            "Available skills (read the full file before using):\n\n"
             f"{catalog}\n\n"
-            "To use a skill, read the full file at the path noted, then follow it.\n"
-            "Skill files:\n\n"
+            "Skill file paths:\n\n"
             f"{files}"
         )
     return _SYSTEM_PROMPT_TEMPLATE.format(skill_section=skill_section)

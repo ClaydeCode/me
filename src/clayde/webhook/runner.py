@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from clayde.claude import (
+    CliInvocationError,
     InvocationTimeoutError,
     UsageLimitError,
     _is_auth_error,
@@ -14,8 +16,11 @@ from clayde.claude import (
     _make_cli_env,
     _resolve_cli_bin,
 )
+from clayde.webhook.notify import NotificationPayload
 
 log = logging.getLogger("clayde.webhook.worker")
+
+_JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)(?:\n\s*)?```", re.DOTALL)
 
 
 async def invoke_claude_pebble(
@@ -25,7 +30,8 @@ async def invoke_claude_pebble(
 
     Always a fresh session — no resume, no session-id persistence.
     Raises ``InvocationTimeoutError`` on timeout, ``UsageLimitError`` on
-    rate/usage limits, ``RuntimeError`` on auth errors.
+    rate/usage limits, ``RuntimeError`` on auth errors, ``CliInvocationError``
+    on any other non-zero exit.
     """
     cli_bin = _resolve_cli_bin()
     cmd = [
@@ -87,5 +93,31 @@ async def invoke_claude_pebble(
             "Claude CLI exited rc=%d is_error=%s stderr=%s",
             proc.returncode, is_error, stderr[:500],
         )
+        raise CliInvocationError(stderr or output_text)
 
     return output_text
+
+
+def extract_notification_payload(result: str) -> NotificationPayload:
+    """Extract the last fenced ```json``` block from Claude's result.
+
+    Falls back to a synthetic "no summary" payload if the block is missing
+    or malformed — the run completed, only the summary is lost.
+    """
+    matches = list(_JSON_BLOCK_RE.finditer(result))
+    if matches:
+        try:
+            data = json.loads(matches[-1].group(1))
+            if isinstance(data, dict):
+                return NotificationPayload(
+                    title=str(data.get("title", "Pebble: done")),
+                    body=str(data.get("body", "(no body)")),
+                    success=bool(data.get("success", True)),
+                )
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    return NotificationPayload(
+        title="Pebble: done (no summary)",
+        body=result[:300] if result else "(empty output)",
+        success=True,
+    )

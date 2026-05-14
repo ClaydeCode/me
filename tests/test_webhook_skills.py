@@ -113,18 +113,64 @@ def test_build_system_prompt_with_skills():
     assert "- add-event: Create a calendar event." in prompt
     assert "/skills/personal/add-note.md" in prompt
     assert "/skills/shared/cal.md" in prompt
-    assert "AT MOST ONE skill" in prompt
-    assert 'respond with\nexactly "No matching skill"' in prompt or '"No matching skill"' in prompt
 
 
 def test_build_system_prompt_empty_catalog():
     prompt = build_system_prompt([])
-    assert "(no skills available)" in prompt
-    assert 'respond with' in prompt
-    assert "No matching skill" in prompt
+    assert "(none currently registered)" in prompt
 
 
 def test_build_user_prompt():
     out = build_user_prompt("hello world", 1778068506)
     assert "1778068506" in out
     assert "hello world" in out
+
+
+def test_prompt_no_longer_caps_to_one_skill():
+    from clayde.webhook.skills import Skill, build_system_prompt
+    from pathlib import Path
+    p = build_system_prompt([
+        Skill(name="add-note", description="Save a note", path=Path("/skills/personal/add-note.md")),
+        Skill(name="ping", description="Health", path=Path("/skills/builtin/ping.md")),
+    ])
+    assert "AT MOST ONE skill" not in p
+    assert "Do not chain" not in p
+    assert "as many as the command needs" in p
+
+
+def test_prompt_mentions_kb_default():
+    from clayde.webhook.skills import build_system_prompt
+    p = build_system_prompt([])
+    assert "/home/clayde/knowledge_base" in p
+    assert "Syncthing" in p
+
+
+def test_prompt_contains_json_contract():
+    from clayde.webhook.skills import build_system_prompt
+    p = build_system_prompt([])
+    assert '```json' in p
+    assert '"title"' in p
+    assert '"body"' in p
+    assert '"success"' in p
+
+
+def test_prompt_when_no_skills_still_invites_judgement():
+    from clayde.webhook.skills import build_system_prompt
+    p = build_system_prompt([])
+    assert "judgement" in p.lower() or "judgment" in p.lower()
+
+
+def test_discovers_builtin_alongside_host(tmp_path):
+    from clayde.webhook.skills import discover_skills
+    # Simulate the in-container layout: /skills/builtin + /skills/personal.
+    (tmp_path / "builtin").mkdir()
+    (tmp_path / "personal").mkdir()
+    (tmp_path / "builtin" / "ping.md").write_text(
+        "---\nname: ping\ndescription: Health check.\n---\n\npong\n"
+    )
+    (tmp_path / "personal" / "add-note.md").write_text(
+        "---\nname: add-note\ndescription: Save a note.\n---\n\n...\n"
+    )
+    skills = discover_skills(tmp_path)
+    names = {s.name for s in skills}
+    assert names == {"ping", "add-note"}

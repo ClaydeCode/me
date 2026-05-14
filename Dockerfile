@@ -34,6 +34,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy source and install project
 COPY src/ src/
+COPY src/clayde/skills_builtin/ /skills/builtin/
 COPY CLAUDE.md ./
 RUN uv sync --frozen --no-dev
 

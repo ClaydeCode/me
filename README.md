@@ -202,8 +202,12 @@ In any repository the bot has access to, assign issues to the bot account. Clayd
 | `CLAYDE_PEBBLE_TOKEN` | Bearer token the Pebble app sends |
 | `CLAYDE_PEBBLE_HOST` | Public hostname for Traefik routing |
 | `CLAYDE_PEBBLE_PORT` | Internal HTTP port (default `8080`) |
-| `CLAYDE_PEBBLE_TIMEOUT` | Per-request CLI timeout seconds (default `600`) |
+| `CLAYDE_PEBBLE_TIMEOUT` | Per-request CLI timeout seconds (default `300`) |
 | `CLAYDE_PEBBLE_QUEUE_MAX` | Max queued jobs before 503 (default `100`) |
+| `CLAYDE_NTFY_TOPIC` | ntfy.sh topic for Pebble outcome notifications |
+| `CLAYDE_NTFY_BASE_URL` | ntfy base URL (override for self-host) |
+| `CLAYDE_NTFY_TIMEOUT_S` | ntfy POST timeout seconds (default `10`) |
+| `CLAYDE_KB_PATH` | In-container KB path; Pebble per-request cwd (default `/home/clayde/knowledge_base`) |
 
 ---
 
@@ -224,11 +228,21 @@ To enable:
 3. Mount one or more skill directories under `/skills/` in
    `docker-compose.yml`. Each skill is a markdown file with frontmatter
    `name` and `description` (see `CLAUDE.md` for the full format).
-4. Configure the Pebble app to POST to
+   Built-in skills (currently `ping`) are baked into the image at
+   `/skills/builtin/`.
+4. Mount `~/knowledge_base` to `/home/clayde/knowledge_base` (already
+   wired in `docker-compose.yml`) so Claude has a writable working
+   directory. Sync across devices is handled by Syncthing on the host —
+   the container performs no `git` against the KB.
+5. Set `CLAYDE_NTFY_TOPIC` (and optionally `CLAYDE_NTFY_BASE_URL` for
+   self-hosted ntfy) to receive outcome notifications on your phone for
+   every Pebble request.
+6. Configure the Pebble app to POST to
    `https://<CLAYDE_PEBBLE_HOST>/webhook/pebble` with the bearer token.
 
 The webhook is fire-and-forget: requests return `200` with a job id and
 work happens asynchronously in a single serial worker. Each request
 spawns a fresh Claude CLI session (no context carries between requests)
-and the system prompt instructs Claude to choose at most one matching
-skill or respond `"No matching skill"`.
+with `cwd` set to the knowledge-base mount. Claude is free to use any
+number of skills per request; every terminal outcome (success, failure,
+timeout, usage limit, queue full, etc.) emits an ntfy notification.
