@@ -108,7 +108,7 @@ def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
     for path in files:
         try:
             skill = _parse_skill(path)
-        except (ValueError, OSError) as e:
+        except Exception as e:
             log.warning("Failed to parse skill %s: %s", path, e)
             continue
         if skill.name in seen:
