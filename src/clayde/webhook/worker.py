@@ -138,5 +138,4 @@ async def worker_loop(queue: JobQueue, *, timeout_s: int, kb_path: str) -> None:
         try:
             await process_job(job, timeout_s=timeout_s, kb_path=kb_path)
         except Exception:
-            # process_job already emitted a notification + logged.
-            pass
+            log.exception("[%s] unhandled error in process_job", job.id)
