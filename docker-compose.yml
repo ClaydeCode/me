@@ -23,9 +23,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/letsencrypt:/letsencrypt
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
   clayde:
     image: ghcr.io/claydecode/me:main
     restart: unless-stopped
@@ -47,16 +44,9 @@ services:
       # handles cross-device sync; container performs no git on the KB.
       - ~/knowledge_base:/home/clayde/knowledge_base
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
       - "traefik.http.routers.clayde.rule=Host(`${CLAYDE_PEBBLE_HOST}`) && PathPrefix(`/webhook`)"
       - "traefik.http.routers.clayde.entrypoints=websecure"
       - "traefik.http.routers.clayde.tls.certresolver=le"
       - "traefik.http.services.clayde.loadbalancer.server.port=8080"
 
-  watchtower:
-    image: containrrr/watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 300 --cleanup --label-enable
