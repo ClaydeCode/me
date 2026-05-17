@@ -160,6 +160,16 @@ def test_prompt_when_no_skills_still_invites_judgement():
     assert "judgement" in p.lower() or "judgment" in p.lower()
 
 
+def test_prompt_mentions_kb_structure_disambiguation():
+    from clayde.webhook.skills import build_system_prompt
+    p = build_system_prompt([])
+    # Tells Claude to inspect KB layout and prefer phonetic neighbours
+    # that match real folders ("after people and tree" → "add a people entry").
+    assert "ls /home/clayde/knowledge_base" in p
+    assert "phonetic" in p.lower()
+    assert "people" in p
+
+
 def test_discovers_builtin_alongside_host(tmp_path):
     from clayde.webhook.skills import discover_skills
     # Simulate the in-container layout: /skills/builtin + /skills/personal.
