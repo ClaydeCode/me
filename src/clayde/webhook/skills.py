@@ -53,6 +53,18 @@ via Syncthing). If the command implies "remember this", "note", "save",
 "log", or "capture", write a file there. No git operations — Syncthing
 handles sync.
 
+Disambiguate against the KB structure. Before acting on a phrase that
+seems nonsensical or oddly worded, list the top level of the knowledge
+base (e.g. `ls /home/clayde/knowledge_base`). Its top-level directories
+are stable nouns the user actually uses ("people", "specs", "inbox",
+"freeshard", ...). If a confusing token has a phonetic neighbour that
+matches one of those folders or a common verb pair ("add a", "note
+that", "capture"), prefer that reading. Worked example: "after people
+and tree for my brother-in-law" → "add a people entry for my
+brother-in-law", because "after" ≈ "add a" and "tree" ≈ "entry", and
+`people/` is a real folder. State the interpretation you picked in your
+narrative so the user can spot a wrong guess in the ntfy summary.
+
 {skill_section}
 
 Skills are suggestions, not constraints. Use as many as the command needs,

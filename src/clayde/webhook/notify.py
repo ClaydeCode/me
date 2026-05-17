@@ -16,11 +16,36 @@ from clayde.telemetry import get_tracer
 log = logging.getLogger("clayde.webhook.notify")
 
 
+# ntfy header values are sent through httpx, which encodes headers as
+# latin-1. Anything outside that range raises UnicodeEncodeError before
+# the request goes out, so the user never sees the notification. We
+# normalise common typographic Unicode to ASCII and replace anything
+# left over with '?'.
+_UNICODE_TO_ASCII = str.maketrans({
+    "—": "-",   # em dash
+    "–": "-",   # en dash
+    "−": "-",   # minus sign
+    "‘": "'",   # left single quote
+    "’": "'",   # right single quote / apostrophe
+    "“": '"',   # left double quote
+    "”": '"',   # right double quote
+    "…": "...", # ellipsis
+    " ": " ",   # non-breaking space
+})
+
+
+def _to_ascii(text: str) -> str:
+    """Coerce arbitrary text to safe ASCII for use in HTTP headers."""
+    return text.translate(_UNICODE_TO_ASCII).encode("ascii", "replace").decode("ascii")
+
+
 class NotificationPayload(BaseModel):
     """Outcome of a Pebble run, as emitted by Claude in the JSON tail.
 
     Title is clamped to 40 chars and body to 300 chars at construction
     time so accidental over-long values never propagate to ntfy headers.
+    Title is additionally coerced to ASCII because it travels as an HTTP
+    header and httpx rejects non-latin-1 header values.
     """
 
     title: str
@@ -30,7 +55,9 @@ class NotificationPayload(BaseModel):
     @field_validator("title", mode="before")
     @classmethod
     def _clamp_title(cls, v):
-        return v[:40] if isinstance(v, str) else v
+        if not isinstance(v, str):
+            return v
+        return _to_ascii(v)[:40]
 
     @field_validator("body", mode="before")
     @classmethod

@@ -22,6 +22,36 @@ def test_notification_payload_accepts_short():
     assert p.success is True
 
 
+def test_notification_payload_em_dash_in_title_normalised():
+    # Real prod failure: em dash in title raised UnicodeEncodeError when
+    # httpx serialised the header as latin-1.
+    p = NotificationPayload(title="Thomas Stegger — plant prefs saved", body="ok", success=True)
+    assert "—" not in p.title
+    assert p.title == "Thomas Stegger - plant prefs saved"
+    # Must round-trip cleanly through latin-1 (the header codec httpx uses).
+    p.title.encode("latin-1")
+
+
+def test_notification_payload_smart_quotes_in_title_normalised():
+    p = NotificationPayload(title="“hi” ‘there’", body="ok", success=True)
+    assert p.title == '"hi" \'there\''
+
+
+def test_notification_payload_unknown_unicode_in_title_replaced():
+    p = NotificationPayload(title="emoji \U0001f600 tail", body="ok", success=True)
+    assert "\U0001f600" not in p.title
+    p.title.encode("ascii")
+
+
+def test_notification_payload_ascii_coercion_runs_before_clamp():
+    # "..." (3 chars) replaces "…" (1 char); clamp comes after, so a
+    # title that fit pre-replacement may not fit after — and that's fine.
+    long = "a" * 38 + "…"  # 39 chars in, 41 chars after replacement
+    p = NotificationPayload(title=long, body="ok", success=True)
+    assert len(p.title) == 40
+    p.title.encode("ascii")
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_send_ntfy_success_headers():
