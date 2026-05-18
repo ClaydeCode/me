@@ -12,53 +12,28 @@ Clayde is a persistent autonomous AI software agent that lives on a dedicated VM
 
 Clayde is assigned GitHub issues in software repositories. For each issue it:
 
-1. Researches the codebase and writes a **preliminary plan**, posting it as a GitHub comment
-2. Waits for human approval (a 👍 reaction) before continuing
-3. For **large issues**: writes a **detailed implementation plan** and posts it as another comment, then waits for approval again before touching any code. For **small issues**: skips directly to implementation after preliminary approval.
-4. Implements the solution on a new branch, opens a pull request, and posts a summary comment
-5. Addresses any review comments left on the PR
+1. Checks for new whitelist-visible activity since its last access
+2. Invokes Claude with the full issue context — Claude decides what to do next: ask clarifying questions, post a plan, implement the solution, or address review comments
+3. Posts a summary comment after each work cycle
+4. Opens a pull request (Claude creates the PR directly with a description and, for diffs spanning more than 3 files, a recommended reading order) and assigns the issue author as reviewer
+5. Monitors the PR and addresses review comments when they appear
 
-At any point while waiting for approval, new comments on the issue will trigger a plan update — Clayde revises the plan and posts a summary of what changed.
-
-Clayde runs as a Docker container in a continuous loop (default: every 5 minutes), driven by a state machine persisted in `data/state.json`.
+Clayde runs as a Docker container in a continuous loop (default: every 5 minutes). Rather than a rigid state machine, it uses **timestamp-based activity detection**: each issue records the last time it was processed, and only new visible activity since that timestamp triggers a new Claude invocation.
 
 ---
 
-## State Machine
+## How It Works
 
-Each issue moves through the following states:
+Clayde's loop is event-driven and stateless by design:
 
-```mermaid
-stateDiagram-v2
-    [*] --> preliminary_planning
-    preliminary_planning --> awaiting_preliminary_approval
-    awaiting_preliminary_approval --> awaiting_preliminary_approval: new comment → plan updated
-    awaiting_preliminary_approval --> planning: 👍 approved (large issue)
-    awaiting_preliminary_approval --> implementing: 👍 approved (small issue)
-    planning --> awaiting_plan_approval
-    awaiting_plan_approval --> awaiting_plan_approval: new comment → plan updated
-    awaiting_plan_approval --> implementing: 👍 approved
-    implementing --> pr_open
-    pr_open --> addressing_review: review comments received
-    addressing_review --> pr_open
-    pr_open --> done: PR approved
-    implementing --> failed: error
-    done --> [*]
-    failed --> [*]
-```
-
-| State | Description |
-|---|---|
-| `preliminary_planning` | Claude explores the codebase and writes a short overview with clarifying questions |
-| `awaiting_preliminary_approval` | Preliminary plan posted; waiting for 👍 from an approver. New comments trigger a plan update. Small issues skip to `implementing` on approval; large issues proceed to `planning`. |
-| `planning` | Claude writes a detailed implementation plan |
-| `awaiting_plan_approval` | Full plan posted; waiting for 👍 from an approver. New comments trigger a plan update. |
-| `implementing` | Claude implements the solution on a new branch |
-| `pr_open` | PR opened; monitoring for review comments |
-| `addressing_review` | Claude is addressing PR review comments |
-| `done` | PR approved; issue complete |
-| `failed` | Error occurred; requires manual reset to retry |
-| `interrupted` | Claude hit a usage/rate limit; retried automatically next cycle |
+1. **Fetch assigned issues** from GitHub.
+2. **For each issue**: check whether there is new whitelist-visible activity (comments or PR reviews) since `last_seen_at`. If the issue has never been seen, or a previous run was interrupted, it is always processed.
+3. **Invoke Claude once** with the full context: issue body, all visible comments, and any open PR reviews. Claude decides the next action — no hard phases.
+4. **Detect PR**: after each run, check for an open PR on the working branch and persist its URL.
+5. **Update `last_seen_at`** to the current time so Clayde's own reply comments don't re-trigger a cycle.
+6. **Crash recovery**: `in_progress` is set before invoking Claude and cleared after. If the process crashes mid-run, the next cycle retries automatically.
+7. **Pure PR approvals** (no comments) update `last_seen_at` without invoking Claude.
+8. **Closed issues** are pruned from state automatically.
 
 ---
 
@@ -70,10 +45,7 @@ Clayde uses **content filtering** rather than gatekeeping which issues to work o
 - If an issue has no visible content at all, it is skipped.
 - Blocked issues (those with "blocked by #N" or "depends on #N" in the body) are also skipped.
 
-Two approval gates then guard forward progress:
-
-1. **Preliminary plan approval** — a 👍 from a whitelisted user on the preliminary plan comment is required before the full plan is written.
-2. **Plan approval** — a 👍 from a whitelisted user on the full plan comment is required before implementation begins.
+There are no hard approval gates — Claude engages with the issue as soon as there is visible content, and the human can steer the conversation by replying in the issue thread.
 
 Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env`.
 
@@ -82,11 +54,14 @@ Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `data/config.
 ## Capabilities
 
 - **Multi-repo support**: Clones and works on any GitHub repository it has access to
-- **Two-phase planning**: Preliminary exploration followed by a detailed plan, each gated by human approval
-- **Full issue lifecycle**: Plan → approval → implement → PR, with comments at each stage
+- **Event-driven loop**: Only invokes Claude when there is new visible activity — no wasted cycles
+- **Natural conversation**: Claude engages directly in the issue comment thread, asking questions and posting plans as needed
+- **Full issue lifecycle**: Engage → implement → PR → review, all driven by new activity
+- **PR creation by Claude**: Claude writes the PR description and a recommended reading order for larger diffs
 - **PR review handling**: Reads and addresses reviewer feedback automatically
 - **Rate-limit resilience**: Detects Claude usage limits and automatically retries
-- **Safety gates**: Whitelist + approval checks prevent unauthorized work
+- **Crash recovery**: `in_progress` flag ensures interrupted runs are retried next cycle
+- **Safety filtering**: Whitelist-based content filtering prevents acting on unauthorized content
 - **Observability**: OpenTelemetry tracing with JSONL file export
 - **Dual Claude backend**: Use the Anthropic API (pay-per-token) or the Claude Code CLI (subscription-based)
 

@@ -1,14 +1,15 @@
 """Tests for clayde.safety."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from clayde.safety import (
     _has_whitelisted_reaction,
     filter_comments,
+    get_new_visible_comments,
     has_visible_content,
     is_comment_visible,
     is_issue_visible,
-    is_plan_approved,
 )
 
 
@@ -19,16 +20,19 @@ def _make_reaction(content, login):
     return r
 
 
-def _mock_settings(users):
+def _mock_settings(users, github_username="ClaydeCode"):
     s = MagicMock()
     s.whitelisted_users_list = users
+    s.github_username = github_username
     return s
 
 
-def _make_comment(login, reactions=None):
+def _make_comment(login, reactions=None, created_at=None):
     c = MagicMock()
     c.user.login = login
     c.get_reactions.return_value = reactions or []
+    if created_at is not None:
+        c.created_at = created_at
     return c
 
 
@@ -134,22 +138,55 @@ class TestHasVisibleContent:
             assert has_visible_content(issue, []) is False
 
 
-class TestIsPlanApproved:
-    def test_approved_with_thumbsup(self):
-        g = MagicMock()
-        comment = MagicMock()
-        comment.get_reactions.return_value = [_make_reaction("+1", "alice")]
-        g.get_repo.return_value.get_issue.return_value.get_comment.return_value = comment
-        with patch("clayde.safety.get_settings", return_value=_mock_settings(["alice"])):
-            assert is_plan_approved(g, "owner", "repo", 1, 100) is True
+class TestGetNewVisibleComments:
+    def _make_ts(self, year=2024, month=1, day=1, hour=12):
+        return datetime(year, month, day, hour, tzinfo=timezone.utc)
 
-    def test_not_approved_wrong_reaction(self):
-        g = MagicMock()
-        comment = MagicMock()
-        comment.get_reactions.return_value = [_make_reaction("heart", "alice")]
-        g.get_repo.return_value.get_issue.return_value.get_comment.return_value = comment
-        with patch("clayde.safety.get_settings", return_value=_mock_settings(["alice"])):
-            assert is_plan_approved(g, "owner", "repo", 1, 100) is False
+    def test_returns_all_non_clayde_when_last_seen_none(self):
+        """No last_seen_at (first time) returns all visible non-Clayde comments."""
+        c1 = _make_comment("alice", created_at=self._make_ts(hour=10))
+        c2 = _make_comment("bob", created_at=self._make_ts(hour=11))
+        with patch("clayde.safety.get_settings",
+                   return_value=_mock_settings(["alice", "bob"], github_username="ClaydeCode")):
+            result = get_new_visible_comments([c1, c2], None)
+        assert c1 in result
+        assert c2 in result
+
+    def test_excludes_clayde_comments_when_last_seen_none(self):
+        clayde_c = _make_comment("ClaydeCode", created_at=self._make_ts())
+        visible_c = _make_comment("alice", created_at=self._make_ts())
+        with patch("clayde.safety.get_settings",
+                   return_value=_mock_settings(["alice", "ClaydeCode"], github_username="ClaydeCode")):
+            result = get_new_visible_comments([clayde_c, visible_c], None)
+        assert clayde_c not in result
+        assert visible_c in result
+
+    def test_returns_comments_newer_than_last_seen(self):
+        last_seen = self._make_ts(hour=10)
+        old_c = _make_comment("alice", created_at=self._make_ts(hour=9))
+        new_c = _make_comment("alice", created_at=self._make_ts(hour=11))
+        with patch("clayde.safety.get_settings",
+                   return_value=_mock_settings(["alice"], github_username="ClaydeCode")):
+            result = get_new_visible_comments([old_c, new_c], last_seen)
+        assert old_c not in result
+        assert new_c in result
+
+    def test_excludes_invisible_comments(self):
+        last_seen = self._make_ts(hour=10)
+        invisible = _make_comment("mallory", created_at=self._make_ts(hour=11))
+        # mallory not whitelisted and no +1 reaction → invisible
+        with patch("clayde.safety.get_settings",
+                   return_value=_mock_settings(["alice"], github_username="ClaydeCode")):
+            result = get_new_visible_comments([invisible], last_seen)
+        assert invisible not in result
+
+    def test_excludes_clayde_own_comments_with_last_seen(self):
+        last_seen = self._make_ts(hour=10)
+        clayde_c = _make_comment("ClaydeCode", created_at=self._make_ts(hour=11))
+        with patch("clayde.safety.get_settings",
+                   return_value=_mock_settings(["ClaydeCode"], github_username="ClaydeCode")):
+            result = get_new_visible_comments([clayde_c], last_seen)
+        assert clayde_c not in result
 
 
 class TestHasWhitelistedReaction:
