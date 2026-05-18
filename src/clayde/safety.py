@@ -1,4 +1,4 @@
-"""Safety gates — content filtering and plan approval checks.
+"""Safety gates — content filtering.
 
 Instead of gatekeeping which issues to work on, we filter *content* so the
 LLM only sees comments/issue bodies that are created by or approved (👍)
@@ -6,7 +6,7 @@ by a whitelisted user.  Every assigned issue is a candidate, but if all
 visible content is filtered out the issue is skipped.
 """
 
-from github import Github
+from datetime import datetime
 
 from clayde.config import get_settings
 
@@ -40,17 +40,20 @@ def is_issue_visible(issue) -> bool:
     return _has_whitelisted_reaction(issue.get_reactions())
 
 
-def get_new_visible_comments(comments: list, last_seen_id: int) -> list:
-    """Return visible comments newer than last_seen_id, excluding Clayde's own.
+def get_new_visible_comments(comments: list, last_seen_at: datetime | None) -> list:
+    """Return visible comments newer than last_seen_at, excluding Clayde's own.
 
-    Used by both the orchestrator (to detect when a plan update is needed)
-    and the plan update task (to collect the new comments for the prompt).
+    If last_seen_at is None (first time or migrated state), returns all
+    visible non-Clayde comments. Uses datetime comparison against
+    comment.created_at.
     """
     github_username = get_settings().github_username
     visible = filter_comments(comments)
+    if last_seen_at is None:
+        return [c for c in visible if c.user.login != github_username]
     return [
         c for c in visible
-        if c.id > last_seen_id and c.user.login != github_username
+        if c.created_at > last_seen_at and c.user.login != github_username
     ]
 
 
@@ -64,16 +67,6 @@ def has_visible_content(issue, comments: list) -> bool:
     if filter_comments(comments):
         return True
     return False
-
-
-# ---------------------------------------------------------------------------
-# Plan approval
-# ---------------------------------------------------------------------------
-
-def is_plan_approved(g: Github, owner: str, repo: str, number: int, comment_id: int) -> bool:
-    """Return True if a whitelisted user reacted +1 to the plan comment."""
-    comment = g.get_repo(f"{owner}/{repo}").get_issue(number).get_comment(comment_id)
-    return _has_whitelisted_reaction(comment.get_reactions())
 
 
 # ---------------------------------------------------------------------------

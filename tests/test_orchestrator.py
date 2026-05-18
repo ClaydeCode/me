@@ -1,15 +1,14 @@
-"""Tests for clayde.orchestrator."""
+"""Tests for clayde.orchestrator — event-driven loop."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from clayde.orchestrator import (
-    _handle_awaiting_approval,
-    _handle_interrupted,
-    _handle_new_issue,
-    _handle_pr_open,
-    _has_new_comments,
+    _handle_issue,
+    _now_utc,
+    _parse_timestamp,
     _prune_closed_issues,
     main,
 )
@@ -50,7 +49,7 @@ class TestMain:
              patch("clayde.orchestrator.load_state", return_value={"issues": {}}):
             main()
 
-    def test_dispatches_new_issue(self):
+    def test_calls_handle_issue_for_each_assigned(self):
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
@@ -60,402 +59,237 @@ class TestMain:
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
              patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
-             patch("clayde.orchestrator._handle_new_issue") as mock_handle:
+             patch("clayde.orchestrator._prune_closed_issues"), \
+             patch("clayde.orchestrator._handle_issue") as mock_handle:
             main()
             mock_handle.assert_called_once()
 
-    def test_skips_done_issues(self):
+    def test_main_calls_prune(self):
         issue = MagicMock()
-        issue.html_url = "url1"
-        state = {"issues": {"url1": {"status": "done"}}}
+        issue.html_url = "https://github.com/o/r/issues/1"
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator.plan") as mock_plan:
+             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
+             patch("clayde.orchestrator._prune_closed_issues") as mock_prune, \
+             patch("clayde.orchestrator._handle_issue"):
             main()
-            mock_plan.run_preliminary.assert_not_called()
-
-    def test_dispatches_awaiting_preliminary(self):
-        issue = MagicMock()
-        issue.html_url = "url1"
-        state = {"issues": {"url1": {
-            "status": "awaiting_preliminary_approval",
-            "owner": "o", "repo": "r", "number": 1,
-            "preliminary_comment_id": 100,
-        }}}
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._handle_awaiting_approval") as mock_handle:
-            main()
-            mock_handle.assert_called_once()
-
-    def test_dispatches_awaiting_plan(self):
-        issue = MagicMock()
-        issue.html_url = "url1"
-        state = {"issues": {"url1": {
-            "status": "awaiting_plan_approval",
-            "owner": "o", "repo": "r", "number": 1,
-            "plan_comment_id": 200,
-        }}}
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._handle_awaiting_approval") as mock_handle:
-            main()
-            mock_handle.assert_called_once()
-
-    def test_dispatches_pr_open(self):
-        issue = MagicMock()
-        issue.html_url = "url1"
-        state = {"issues": {"url1": {
-            "status": "pr_open",
-            "owner": "o", "repo": "r", "number": 1,
-            "pr_url": "https://github.com/o/r/pull/5",
-        }}}
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._handle_pr_open") as mock_handle:
-            main()
-            mock_handle.assert_called_once()
-
-    @pytest.mark.parametrize("transient_status", [
-        "preliminary_planning",
-        "planning",
-        "implementing",
-        "addressing_review",
-    ])
-    def test_recovers_transient_state_to_interrupted(self, transient_status):
-        """Issues stuck in transient states are converted to interrupted."""
-        issue = MagicMock()
-        issue.html_url = "url1"
-        state = {"issues": {"url1": {"status": transient_status, "number": 1}}}
-        recovered_state = {"issues": {"url1": {
-            "status": "interrupted",
-            "interrupted_phase": transient_status,
-            "number": 1,
-        }}}
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", side_effect=[state, state, recovered_state]), \
-             patch("clayde.orchestrator.update_issue_state") as mock_update, \
-             patch("clayde.orchestrator._handle_interrupted") as mock_handle:
-            main()
-            mock_update.assert_called_once_with(
-                "url1",
-                {"status": "interrupted", "interrupted_phase": transient_status},
-            )
-            mock_handle.assert_called_once()
-
-    def test_backward_compat_awaiting_approval(self):
-        """Old 'awaiting_approval' status maps to 'awaiting_plan_approval'."""
-        issue = MagicMock()
-        issue.html_url = "url1"
-        state = {"issues": {"url1": {
-            "status": "awaiting_approval",
-            "owner": "o", "repo": "r", "number": 1,
-            "plan_comment_id": 200,
-        }}}
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._handle_awaiting_approval") as mock_handle:
-            main()
-            mock_handle.assert_called_once()
+            mock_prune.assert_called_once()
 
 
-class TestHandleNewIssue:
+class TestHandleIssue:
     def test_skips_blocked_issue(self):
         g = MagicMock()
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
         with patch("clayde.orchestrator.is_blocked", return_value=True), \
              patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_new_issue(g, issue, issue.html_url)
-            mock_plan.run_preliminary.assert_not_called()
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+            mock_work.run.assert_not_called()
 
     def test_skips_no_visible_content(self):
         g = MagicMock()
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
         with patch("clayde.orchestrator.is_blocked", return_value=False), \
              patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
              patch("clayde.orchestrator.has_visible_content", return_value=False), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_new_issue(g, issue, issue.html_url)
-            mock_plan.run_preliminary.assert_not_called()
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+            mock_work.run.assert_not_called()
 
-    def test_runs_preliminary_plan_when_visible(self):
+    def test_invokes_work_on_first_time(self):
+        """No last_seen_at means first-time evaluation — always invoke."""
         g = MagicMock()
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
         with patch("clayde.orchestrator.is_blocked", return_value=False), \
              patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
              patch("clayde.orchestrator.has_visible_content", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_new_issue(g, issue, issue.html_url)
-            mock_plan.run_preliminary.assert_called_once_with(issue.html_url)
+             patch("clayde.orchestrator.get_issue_state", return_value={}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+            mock_work.run.assert_called_once_with(issue.html_url)
 
-    def test_sets_failed_on_exception(self):
+    def test_invokes_work_on_new_comments(self):
         g = MagicMock()
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
+        new_comment = MagicMock()
+        ts = "2024-01-01T12:00:00+00:00"
+        with patch("clayde.orchestrator.is_blocked", return_value=False), \
+             patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.orchestrator.fetch_issue_comments", return_value=[new_comment]), \
+             patch("clayde.orchestrator.has_visible_content", return_value=True), \
+             patch("clayde.orchestrator.get_issue_state", return_value={"last_seen_at": ts}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[new_comment]), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+            mock_work.run.assert_called_once_with(issue.html_url)
+
+    def test_skips_when_no_new_activity(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
+        ts = "2024-01-01T12:00:00+00:00"
         with patch("clayde.orchestrator.is_blocked", return_value=False), \
              patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
              patch("clayde.orchestrator.has_visible_content", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan, \
-             patch("clayde.orchestrator.update_issue_state") as mock_update:
-            mock_plan.run_preliminary.side_effect = RuntimeError("boom")
-            _handle_new_issue(g, issue, issue.html_url)
-            mock_update.assert_called_once_with(issue.html_url, {"status": "failed"})
+             patch("clayde.orchestrator.get_issue_state", return_value={"last_seen_at": ts}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+            mock_work.run.assert_not_called()
+
+    def test_invokes_work_when_in_progress(self):
+        """Crash recovery: in_progress=True triggers invocation even with no new activity."""
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
+        ts = "2024-01-01T12:00:00+00:00"
+        with patch("clayde.orchestrator.is_blocked", return_value=False), \
+             patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
+             patch("clayde.orchestrator.has_visible_content", return_value=True), \
+             patch("clayde.orchestrator.get_issue_state",
+                   return_value={"last_seen_at": ts, "in_progress": True}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+            mock_work.run.assert_called_once_with(issue.html_url)
+
+    def test_sets_in_progress_before_invoke_and_clears_after(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
+        calls = []
+        with patch("clayde.orchestrator.is_blocked", return_value=False), \
+             patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
+             patch("clayde.orchestrator.has_visible_content", return_value=True), \
+             patch("clayde.orchestrator.get_issue_state", return_value={}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator.update_issue_state",
+                   side_effect=lambda url, upd: calls.append(upd)), \
+             patch("clayde.orchestrator.work"):
+            _handle_issue(g, issue, issue.html_url)
+
+        # First update sets in_progress=True
+        assert calls[0] == {"in_progress": True}
+        # Last update clears in_progress and sets last_seen_at
+        last = calls[-1]
+        assert last.get("in_progress") is False
+        assert "last_seen_at" in last
+
+    def test_leaves_in_progress_on_usage_limit(self):
+        from clayde.claude import UsageLimitError
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
+        calls = []
+        with patch("clayde.orchestrator.is_blocked", return_value=False), \
+             patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
+             patch("clayde.orchestrator.has_visible_content", return_value=True), \
+             patch("clayde.orchestrator.get_issue_state", return_value={}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator.update_issue_state",
+                   side_effect=lambda url, upd: calls.append(upd)), \
+             patch("clayde.orchestrator.work") as mock_work:
+            mock_work.run.side_effect = UsageLimitError("limit", cost_eur=0.0)
+            _handle_issue(g, issue, issue.html_url)
+
+        # First call sets in_progress=True, nothing clears it
+        assert calls[0] == {"in_progress": True}
+        # No subsequent call should set in_progress=False
+        assert not any(c.get("in_progress") is False for c in calls)
 
     def test_proceeds_if_blocked_check_fails(self):
-        """If blocked-check raises, proceed anyway (fail open)."""
         g = MagicMock()
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
         with patch("clayde.orchestrator.is_blocked", side_effect=Exception("API error")), \
              patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
              patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
              patch("clayde.orchestrator.has_visible_content", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_new_issue(g, issue, issue.html_url)
-            mock_plan.run_preliminary.assert_called_once()
+             patch("clayde.orchestrator.get_issue_state", return_value={}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+            mock_work.run.assert_called_once()
 
-
-class TestHandleAwaitingPreliminary:
-    def test_does_nothing_when_not_approved_and_no_new_comments(self):
+    def test_clears_in_progress_on_unexpected_error(self):
         g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=False), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_plan.run_thorough.assert_not_called()
-            mock_plan.run_update.assert_not_called()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Test"
+        calls = []
+        with patch("clayde.orchestrator.is_blocked", return_value=False), \
+             patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
+             patch("clayde.orchestrator.has_visible_content", return_value=True), \
+             patch("clayde.orchestrator.get_issue_state", return_value={}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator.update_issue_state",
+                   side_effect=lambda url, upd: calls.append(upd)), \
+             patch("clayde.orchestrator.work") as mock_work:
+            mock_work.run.side_effect = RuntimeError("boom")
+            _handle_issue(g, issue, issue.html_url)
 
-    def test_runs_thorough_when_approved(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_plan.run_thorough.assert_called_once_with("url")
-
-    def test_runs_update_when_new_comments(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}
-        with patch("clayde.orchestrator._has_new_comments", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_plan.run_update.assert_called_once_with("url", "preliminary")
-
-    def test_runs_implement_directly_when_small_and_approved(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100, "size": "small"}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan, \
-             patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_plan.run_thorough.assert_not_called()
-            mock_impl.run.assert_called_once_with("url")
-
-    def test_runs_thorough_when_large_and_approved(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100, "size": "large"}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan, \
-             patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_plan.run_thorough.assert_called_once_with("url")
-            mock_impl.run.assert_not_called()
-
-    def test_defaults_to_large_when_size_absent(self):
-        """In-flight issues without size in state default to large behavior."""
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan, \
-             patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_plan.run_thorough.assert_called_once_with("url")
-            mock_impl.run.assert_not_called()
-
-    def test_sets_failed_on_thorough_exception(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "preliminary_comment_id": 100}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan, \
-             patch("clayde.orchestrator.update_issue_state") as mock_update:
-            mock_plan.run_thorough.side_effect = RuntimeError("boom")
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_update.assert_called_once_with("url", {"status": "failed"})
-
-    def test_marks_failed_if_no_preliminary_comment_id(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1}
-        with patch("clayde.orchestrator.update_issue_state") as mock_update:
-            _handle_awaiting_approval(g, "url", entry, phase="preliminary")
-            mock_update.assert_called_once_with("url", {"status": "failed"})
+        # in_progress should be cleared to False after an unexpected error
+        assert any(c.get("in_progress") is False for c in calls)
 
 
-class TestHandleAwaitingPlan:
-    def test_does_nothing_when_not_approved_and_no_new_comments(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "plan_comment_id": 200}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=False), \
-             patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_awaiting_approval(g, "url", entry, phase="thorough")
-            mock_impl.run.assert_not_called()
+class TestParseTimestamp:
+    def test_parses_utc_z_suffix(self):
+        ts = "2024-01-15T10:30:00Z"
+        result = _parse_timestamp(ts)
+        assert result is not None
+        assert result.tzinfo is not None
+        assert result.year == 2024
 
-    def test_runs_implement_when_approved(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "plan_comment_id": 200}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
-             patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_awaiting_approval(g, "url", entry, phase="thorough")
-            mock_impl.run.assert_called_once_with("url")
+    def test_parses_offset_format(self):
+        ts = "2024-01-15T10:30:00+00:00"
+        result = _parse_timestamp(ts)
+        assert result is not None
 
-    def test_runs_update_when_new_comments(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "plan_comment_id": 200}
-        with patch("clayde.orchestrator._has_new_comments", return_value=True), \
-             patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_awaiting_approval(g, "url", entry, phase="thorough")
-            mock_plan.run_update.assert_called_once_with("url", "thorough")
+    def test_returns_none_for_none(self):
+        assert _parse_timestamp(None) is None
 
-    def test_sets_failed_on_exception(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1, "plan_comment_id": 200}
-        with patch("clayde.orchestrator._has_new_comments", return_value=False), \
-             patch("clayde.orchestrator.is_plan_approved", return_value=True), \
-             patch("clayde.orchestrator.implement") as mock_impl, \
-             patch("clayde.orchestrator.update_issue_state") as mock_update:
-            mock_impl.run.side_effect = RuntimeError("boom")
-            _handle_awaiting_approval(g, "url", entry, phase="thorough")
-            mock_update.assert_called_once_with("url", {"status": "failed"})
+    def test_returns_none_for_empty(self):
+        assert _parse_timestamp("") is None
 
-    def test_marks_failed_if_no_plan_comment_id(self):
-        g = MagicMock()
-        entry = {"owner": "o", "repo": "r", "number": 1}
-        with patch("clayde.orchestrator.update_issue_state") as mock_update:
-            _handle_awaiting_approval(g, "url", entry, phase="thorough")
-            mock_update.assert_called_once_with("url", {"status": "failed"})
+    def test_returns_none_for_invalid(self):
+        assert _parse_timestamp("not-a-timestamp") is None
 
 
-class TestHandlePrOpen:
-    def test_runs_review(self):
-        g = MagicMock()
-        entry = {"number": 1, "pr_url": "https://github.com/o/r/pull/5"}
-        with patch("clayde.orchestrator.review") as mock_review:
-            _handle_pr_open(g, "url", entry)
-            mock_review.run.assert_called_once_with("url")
-
-    def test_sets_failed_on_exception(self):
-        g = MagicMock()
-        entry = {"number": 1}
-        with patch("clayde.orchestrator.review") as mock_review, \
-             patch("clayde.orchestrator.update_issue_state") as mock_update:
-            mock_review.run.side_effect = RuntimeError("boom")
-            _handle_pr_open(g, "url", entry)
-            mock_update.assert_called_once_with("url", {"status": "failed"})
-
-
-class TestHandleInterrupted:
-    def test_retries_preliminary_planning(self):
-        entry = {"interrupted_phase": "preliminary_planning"}
-        with patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_interrupted("url", entry)
-            mock_plan.run_preliminary.assert_called_once_with("url")
-
-    def test_retries_planning(self):
-        entry = {"interrupted_phase": "planning"}
-        with patch("clayde.orchestrator.plan") as mock_plan:
-            _handle_interrupted("url", entry)
-            mock_plan.run_thorough.assert_called_once_with("url")
-
-    def test_retries_implementing(self):
-        entry = {"interrupted_phase": "implementing"}
-        with patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_interrupted("url", entry)
-            mock_impl.run.assert_called_once_with("url")
-
-    def test_retries_addressing_review(self):
-        entry = {"interrupted_phase": "addressing_review"}
-        with patch("clayde.orchestrator.review") as mock_review:
-            _handle_interrupted("url", entry)
-            mock_review.run.assert_called_once_with("url")
-
-    def test_skips_unknown_phase(self):
-        entry = {"interrupted_phase": "unknown"}
-        with patch("clayde.orchestrator.plan") as mock_plan, \
-             patch("clayde.orchestrator.implement") as mock_impl:
-            _handle_interrupted("url", entry)
-            mock_plan.run_preliminary.assert_not_called()
-            mock_plan.run_thorough.assert_not_called()
-            mock_impl.run.assert_not_called()
-
-    def test_stays_interrupted_on_error(self):
-        entry = {"interrupted_phase": "preliminary_planning"}
-        with patch("clayde.orchestrator.plan") as mock_plan, \
-             patch("clayde.orchestrator.update_issue_state") as mock_update:
-            mock_plan.run_preliminary.side_effect = RuntimeError("boom")
-            _handle_interrupted("url", entry)
-            mock_update.assert_called_once_with("url", {"status": "interrupted"})
-
-
-class TestHasNewComments:
-    def test_detects_new_visible_comments(self):
-        g = MagicMock()
-        comment = MagicMock()
-        with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_new_visible_comments", return_value=[comment]):
-            entry = {"last_seen_comment_id": 100}
-            assert _has_new_comments(g, "o", "r", 1, entry) is True
-
-    def test_no_new_comments(self):
-        g = MagicMock()
-        comment = MagicMock()
-        with patch("clayde.orchestrator.fetch_issue_comments", return_value=[comment]), \
-             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]):
-            entry = {"last_seen_comment_id": 100}
-            assert _has_new_comments(g, "o", "r", 1, entry) is False
+class TestNowUtc:
+    def test_returns_iso_string(self):
+        ts = _now_utc()
+        assert isinstance(ts, str)
+        parsed = datetime.fromisoformat(ts)
+        assert parsed.tzinfo is not None
 
 
 class TestPruneClosedIssues:
@@ -486,7 +320,7 @@ class TestPruneClosedIssues:
 
     def test_skips_entry_missing_fields(self):
         g = MagicMock()
-        issues_state = {"url1": {"status": "done"}}  # no owner/repo/number
+        issues_state = {"url1": {"last_seen_at": "2024-01-01T00:00:00Z"}}
         with patch("clayde.orchestrator.fetch_issue") as mock_fetch, \
              patch("clayde.orchestrator.save_state") as mock_save:
             _prune_closed_issues(g, issues_state)
@@ -515,28 +349,10 @@ class TestPruneClosedIssues:
              patch("clayde.orchestrator.load_state", return_value={"issues": dict(issues_state)}), \
              patch("clayde.orchestrator.save_state") as mock_save:
             _prune_closed_issues(g, issues_state)
-            # Only one save call (batched)
             assert mock_save.call_count == 1
             saved = mock_save.call_args[0][0]
             assert url1 not in saved["issues"]
             assert url2 not in saved["issues"]
-
-    def test_main_calls_prune(self):
-        """main() calls _prune_closed_issues before processing issues."""
-        issue = MagicMock()
-        issue.html_url = "https://github.com/o/r/issues/1"
-        state = {"issues": {}}
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value=state), \
-             patch("clayde.orchestrator._prune_closed_issues") as mock_prune, \
-             patch("clayde.orchestrator._handle_new_issue"):
-            main()
-            mock_prune.assert_called_once()
 
 
 def test_run_loop_without_pebble_uses_legacy_path(monkeypatch):
@@ -545,7 +361,7 @@ def test_run_loop_without_pebble_uses_legacy_path(monkeypatch):
 
     calls = []
     monkeypatch.setattr(orchestrator, "main", lambda: calls.append("tick"))
-    monkeypatch.setattr(orchestrator, "_shutdown", True)  # exit after first iteration
+    monkeypatch.setattr(orchestrator, "_shutdown", True)
     monkeypatch.setattr(orchestrator, "setup_logging", lambda: None)
 
     class _S:
@@ -554,8 +370,6 @@ def test_run_loop_without_pebble_uses_legacy_path(monkeypatch):
 
     monkeypatch.setattr(orchestrator, "get_settings", lambda: _S())
     orchestrator.run_loop()
-    # _shutdown=True from start means main() never runs; that's fine — the
-    # important assertion is no exception and no asyncio.run call.
 
 
 def test_run_loop_with_pebble_invokes_async_entry(monkeypatch):

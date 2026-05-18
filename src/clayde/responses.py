@@ -2,31 +2,11 @@
 
 import json
 import re
-from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
 
-class PreliminaryPlanResponse(BaseModel):
-    plan: str
-    size: Literal["small", "large"]
-    branch_name: str
-
-
-class ThoroughPlanResponse(BaseModel):
-    plan: str
-
-
-class UpdatePlanResponse(BaseModel):
-    summary: str
-    updated_plan: str
-
-
-class ImplementResponse(BaseModel):
-    summary: str
-
-
-class AddressReviewResponse(BaseModel):
+class WorkResponse(BaseModel):
     summary: str
 
 
