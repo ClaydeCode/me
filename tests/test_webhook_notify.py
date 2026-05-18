@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+import base64
+import re
+
 import httpx
 import pytest
 import respx
 
-from clayde.webhook.notify import NotificationPayload, send_ntfy
+from clayde.webhook.notify import NotificationPayload, _encode_header_value, send_ntfy
 
 
 def test_notification_payload_clamps_length():
     p = NotificationPayload(title="x" * 100, body="y" * 1000, success=True)
     assert len(p.title) == 40
     assert len(p.body) == 300
+
+
+def test_notification_payload_clamps_length_with_unicode():
+    # Character-count clamp, not byte-count — verify multibyte chars still
+    # count as one position.
+    p = NotificationPayload(title="ü" * 100, body="ß" * 1000, success=True)
+    assert len(p.title) == 40
+    assert len(p.body) == 300
+    assert p.title == "ü" * 40
 
 
 def test_notification_payload_accepts_short():
@@ -22,34 +34,41 @@ def test_notification_payload_accepts_short():
     assert p.success is True
 
 
-def test_notification_payload_em_dash_in_title_normalised():
-    # Real prod failure: em dash in title raised UnicodeEncodeError when
-    # httpx serialised the header as latin-1.
-    p = NotificationPayload(title="Thomas Stegger — plant prefs saved", body="ok", success=True)
-    assert "—" not in p.title
-    assert p.title == "Thomas Stegger - plant prefs saved"
-    # Must round-trip cleanly through latin-1 (the header codec httpx uses).
-    p.title.encode("latin-1")
+def test_notification_payload_preserves_unicode():
+    # Raw Unicode is kept as-is; RFC 2047 encoding happens in send_ntfy.
+    p = NotificationPayload(title="Müller — Notiz", body="ok", success=True)
+    assert p.title == "Müller — Notiz"
 
 
-def test_notification_payload_smart_quotes_in_title_normalised():
-    p = NotificationPayload(title="“hi” ‘there’", body="ok", success=True)
-    assert p.title == '"hi" \'there\''
+def test_encode_header_value_passes_ascii_through():
+    assert _encode_header_value("plain ascii") == "plain ascii"
 
 
-def test_notification_payload_unknown_unicode_in_title_replaced():
-    p = NotificationPayload(title="emoji \U0001f600 tail", body="ok", success=True)
-    assert "\U0001f600" not in p.title
-    p.title.encode("ascii")
+_RFC2047_WORD = re.compile(r"=\?utf-8\?[bq]\?[^?]*\?=", re.IGNORECASE)
 
 
-def test_notification_payload_ascii_coercion_runs_before_clamp():
-    # "..." (3 chars) replaces "…" (1 char); clamp comes after, so a
-    # title that fit pre-replacement may not fit after — and that's fine.
-    long = "a" * 38 + "…"  # 39 chars in, 41 chars after replacement
-    p = NotificationPayload(title=long, body="ok", success=True)
-    assert len(p.title) == 40
-    p.title.encode("ascii")
+def test_encode_header_value_rfc2047_encodes_unicode():
+    out = _encode_header_value("Thomas Stegger — plant prefs saved")
+    # email.header.Header emits =?utf-8?[bq]?...?= encoded words; B and Q
+    # are both valid RFC 2047 forms and ntfy decodes either.
+    assert _RFC2047_WORD.search(out)
+    decoded = _decode_rfc2047(out)
+    assert decoded == "Thomas Stegger — plant prefs saved"
+    # Result must be ASCII-only so httpx can serialise it as a header.
+    out.encode("ascii")
+
+
+def _decode_rfc2047(encoded: str) -> str:
+    """Decode an RFC 2047 encoded-word string back to its Unicode form."""
+    from email.header import decode_header
+    parts = decode_header(encoded)
+    out = []
+    for chunk, charset in parts:
+        if isinstance(chunk, bytes):
+            out.append(chunk.decode(charset or "ascii"))
+        else:
+            out.append(chunk)
+    return "".join(out)
 
 
 @pytest.mark.asyncio
@@ -68,6 +87,7 @@ async def test_send_ntfy_success_headers():
     )
     assert route.called
     req = route.calls.last.request
+    # ASCII title passes through verbatim.
     assert req.headers["title"] == "pong"
     assert req.headers["priority"] == "3"
     assert req.headers["tags"] == "white_check_mark"
@@ -91,6 +111,69 @@ async def test_send_ntfy_uses_failure_priority_and_tags_when_success_false():
     req = route.calls.last.request
     assert req.headers["priority"] == "5"
     assert req.headers["tags"] == "rotating_light"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_ntfy_encodes_unicode_title_as_rfc2047():
+    route = respx.post("https://ntfy.sh/abc123").mock(
+        return_value=httpx.Response(200, json={"id": "msg1"})
+    )
+    title = "Thomas Stegger — plant prefs saved"
+    await send_ntfy(
+        title=title,
+        body="ok",
+        success=True,
+        base_url="https://ntfy.sh",
+        topic="abc123",
+        timeout_s=5,
+    )
+    req = route.calls.last.request
+    header = req.headers["title"]
+    # Must be ASCII-only so httpx can transmit it.
+    header.encode("ascii")
+    assert _RFC2047_WORD.search(header)
+    assert _decode_rfc2047(header) == title
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_ntfy_handles_emoji_title():
+    route = respx.post("https://ntfy.sh/abc123").mock(
+        return_value=httpx.Response(200, json={"id": "msg1"})
+    )
+    title = "\U0001f600 done"
+    await send_ntfy(
+        title=title,
+        body="ok",
+        success=True,
+        base_url="https://ntfy.sh",
+        topic="abc123",
+        timeout_s=5,
+    )
+    req = route.calls.last.request
+    header = req.headers["title"]
+    header.encode("ascii")
+    assert _decode_rfc2047(header) == title
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_ntfy_handles_german_umlauts_title():
+    route = respx.post("https://ntfy.sh/abc123").mock(
+        return_value=httpx.Response(200, json={"id": "msg1"})
+    )
+    title = "Müller — Notiz gespeichert"
+    await send_ntfy(
+        title=title,
+        body="ok",
+        success=True,
+        base_url="https://ntfy.sh",
+        topic="abc123",
+        timeout_s=5,
+    )
+    req = route.calls.last.request
+    assert _decode_rfc2047(req.headers["title"]) == title
 
 
 @pytest.mark.asyncio
