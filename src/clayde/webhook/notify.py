@@ -7,6 +7,7 @@ A notification is feedback, not a transactional side-effect.
 from __future__ import annotations
 
 import logging
+from email.header import Header
 
 import httpx
 from pydantic import BaseModel, field_validator
@@ -16,36 +17,30 @@ from clayde.telemetry import get_tracer
 log = logging.getLogger("clayde.webhook.notify")
 
 
-# ntfy header values are sent through httpx, which encodes headers as
-# latin-1. Anything outside that range raises UnicodeEncodeError before
-# the request goes out, so the user never sees the notification. We
-# normalise common typographic Unicode to ASCII and replace anything
-# left over with '?'.
-_UNICODE_TO_ASCII = str.maketrans({
-    "—": "-",   # em dash
-    "–": "-",   # en dash
-    "−": "-",   # minus sign
-    "‘": "'",   # left single quote
-    "’": "'",   # right single quote / apostrophe
-    "“": '"',   # left double quote
-    "”": '"',   # right double quote
-    "…": "...", # ellipsis
-    " ": " ",   # non-breaking space
-})
+def _encode_header_value(text: str) -> str:
+    """Encode a header value safely for httpx.
 
-
-def _to_ascii(text: str) -> str:
-    """Coerce arbitrary text to safe ASCII for use in HTTP headers."""
-    return text.translate(_UNICODE_TO_ASCII).encode("ascii", "replace").decode("ascii")
+    httpx serialises header values as latin-1, so raw non-ASCII strings
+    raise UnicodeEncodeError before the request leaves the process. ntfy
+    accepts RFC 2047 encoded-words (``=?utf-8?b?<base64>?=``) and decodes
+    them server-side, so we route non-ASCII through that. ASCII titles
+    pass through verbatim — keeps log/trace output readable and avoids
+    pointless wire overhead.
+    """
+    try:
+        text.encode("ascii")
+    except UnicodeEncodeError:
+        return Header(text, charset="utf-8").encode()
+    return text
 
 
 class NotificationPayload(BaseModel):
     """Outcome of a Pebble run, as emitted by Claude in the JSON tail.
 
     Title is clamped to 40 chars and body to 300 chars at construction
-    time so accidental over-long values never propagate to ntfy headers.
-    Title is additionally coerced to ASCII because it travels as an HTTP
-    header and httpx rejects non-latin-1 header values.
+    time so accidental over-long values never propagate to ntfy. The
+    title is stored as the raw Unicode string the user/Claude produced;
+    RFC 2047 encoding for the actual HTTP header happens in ``send_ntfy``.
     """
 
     title: str
@@ -55,9 +50,7 @@ class NotificationPayload(BaseModel):
     @field_validator("title", mode="before")
     @classmethod
     def _clamp_title(cls, v):
-        if not isinstance(v, str):
-            return v
-        return _to_ascii(v)[:40]
+        return v[:40] if isinstance(v, str) else v
 
     @field_validator("body", mode="before")
     @classmethod
@@ -77,13 +70,14 @@ async def send_ntfy(
     """POST to ntfy.sh. Best-effort: errors are logged + OTel-annotated, never raised."""
     url = f"{base_url.rstrip('/')}/{topic}"
     headers = {
-        "Title": title,
+        "Title": _encode_header_value(title),
         "Priority": "3" if success else "5",
         "Tags": "white_check_mark" if success else "rotating_light",
     }
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.pebble.notify") as span:
         span.set_attribute("pebble.notify_topic", topic)
+        # Span attribute holds the raw Unicode title for readable traces.
         span.set_attribute("pebble.notify_title", title)
         span.set_attribute("pebble.outcome_success", success)
         try:
