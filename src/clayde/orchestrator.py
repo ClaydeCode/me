@@ -277,7 +277,7 @@ async def _run_with_pebble() -> None:
     app = create_app(queue=queue, expected_token=settings.pebble_token)
     config = uvicorn.Config(
         app, host="0.0.0.0", port=settings.pebble_port,
-        log_level="info", access_log=False, lifespan="off",
+        log_level="info", access_log=True, lifespan="off",
     )
     server = uvicorn.Server(config)
 
