@@ -107,8 +107,6 @@ def test_build_system_prompt_with_skills():
     ]
     prompt = build_system_prompt(skills)
     assert "Pebble watch" in prompt
-    assert "speech-to-text" in prompt
-    assert "phonetically similar" in prompt
     assert "- add-note: Save a note." in prompt
     assert "- add-event: Create a calendar event." in prompt
     assert "/skills/personal/add-note.md" in prompt
@@ -138,13 +136,6 @@ def test_prompt_no_longer_caps_to_one_skill():
     assert "as many as the command needs" in p
 
 
-def test_prompt_mentions_kb_default():
-    from clayde.webhook.skills import build_system_prompt
-    p = build_system_prompt([])
-    assert "/home/clayde/knowledge_base" in p
-    assert "Syncthing" in p
-
-
 def test_prompt_contains_json_contract():
     from clayde.webhook.skills import build_system_prompt
     p = build_system_prompt([])
@@ -158,16 +149,6 @@ def test_prompt_when_no_skills_still_invites_judgement():
     from clayde.webhook.skills import build_system_prompt
     p = build_system_prompt([])
     assert "judgement" in p.lower() or "judgment" in p.lower()
-
-
-def test_prompt_mentions_kb_structure_disambiguation():
-    from clayde.webhook.skills import build_system_prompt
-    p = build_system_prompt([])
-    # Tells Claude to inspect KB layout and prefer phonetic neighbours
-    # that match real folders ("after people and tree" → "add a people entry").
-    assert "ls /home/clayde/knowledge_base" in p
-    assert "phonetic" in p.lower()
-    assert "people" in p
 
 
 def test_discovers_builtin_alongside_host(tmp_path):
@@ -184,3 +165,36 @@ def test_discovers_builtin_alongside_host(tmp_path):
     skills = discover_skills(tmp_path)
     names = {s.name for s in skills}
     assert names == {"ping", "add-note"}
+
+
+def test_discover_personal_overrides_builtin(tmp_path, caplog):
+    """Non-builtin skills (personal/shared) win over builtin on name collision."""
+    from clayde.webhook.skills import discover_skills
+    (tmp_path / "builtin").mkdir()
+    (tmp_path / "personal").mkdir()
+    (tmp_path / "builtin" / "voice-command.md").write_text(
+        "---\nname: voice-command\ndescription: Builtin version.\n---\n\nBuiltin body.\n"
+    )
+    (tmp_path / "personal" / "voice-command.md").write_text(
+        "---\nname: voice-command\ndescription: Personal override.\n---\n\nCustom body.\n"
+    )
+    with caplog.at_level("WARNING", logger="clayde.webhook"):
+        skills = discover_skills(tmp_path)
+    assert len(skills) == 1
+    assert skills[0].description == "Personal override."
+    assert any("Duplicate skill name" in r.getMessage() for r in caplog.records)
+
+
+def test_voice_command_builtin_skill_exists():
+    """The shipped voice-command builtin skill has the expected frontmatter."""
+    from clayde.webhook import skills as skills_mod
+    import importlib.resources
+    builtin_dir = Path(skills_mod.__file__).parent.parent / "skills_builtin"
+    vc_path = builtin_dir / "voice-command.md"
+    assert vc_path.exists(), "voice-command.md missing from skills_builtin/"
+    skill = _parse_skill(vc_path)
+    assert skill.name == "voice-command"
+    # Behavioral content belongs in the skill, not in the system prompt.
+    body = vc_path.read_text()
+    assert "speech-to-text" in body or "voice" in body.lower()
+    assert "/home/clayde/knowledge_base" in body

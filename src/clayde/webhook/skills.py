@@ -42,28 +42,7 @@ def _parse_skill(path: Path) -> Skill:
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are Clayde, executing a voice command from the user via a Pebble watch.
-
-The text you receive is speech-to-text output. It MAY contain transcription
-errors. Consider phonetically similar words and the most likely intent —
-e.g. "calendar" might arrive as "colander". Use judgement.
-
-Default working target: /home/clayde/knowledge_base (mounted RW, synced
-via Syncthing). If the command implies "remember this", "note", "save",
-"log", or "capture", write a file there. No git operations — Syncthing
-handles sync.
-
-Disambiguate against the KB structure. Before acting on a phrase that
-seems nonsensical or oddly worded, list the top level of the knowledge
-base (e.g. `ls /home/clayde/knowledge_base`). Its top-level directories
-are stable nouns the user actually uses ("people", "specs", "inbox",
-"freeshard", ...). If a confusing token has a phonetic neighbour that
-matches one of those folders or a common verb pair ("add a", "note
-that", "capture"), prefer that reading. Worked example: "after people
-and tree for my brother-in-law" → "add a people entry for my
-brother-in-law", because "after" ≈ "add a" and "tree" ≈ "entry", and
-`people/` is a real folder. State the interpretation you picked in your
-narrative so the user can spot a wrong guess in the ntfy summary.
+You are Clayde, executing a request from the user via a Pebble watch.
 
 {skill_section}
 
@@ -105,17 +84,27 @@ def build_user_prompt(text: str, timestamp: int) -> str:
     return f"(timestamp {timestamp})\n{text}"
 
 
+def _is_builtin(path: Path) -> bool:
+    """Return True if *path* lives under the ``builtin/`` subdirectory."""
+    return "builtin" in {p.name for p in path.parents}
+
+
 def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
     """Recursively discover all skills under ``root``.
 
-    Returns a list ordered alphabetically by full path. On duplicate
-    ``name`` fields, the first-discovered skill wins; subsequent
-    duplicates are logged at WARNING and ignored. Malformed files are
-    logged at WARNING and skipped.
+    Returns a list ordered alphabetically by full path. Non-builtin skills
+    (those NOT under a ``builtin/`` subdirectory) are processed before
+    builtin skills so that user-mounted overrides take priority over
+    shipped defaults. On duplicate ``name`` fields after ordering, the
+    first-encountered skill wins; subsequent duplicates are logged at
+    WARNING and ignored. Malformed files are logged at WARNING and skipped.
     """
     if not root.exists():
         return []
-    files = sorted(root.rglob("*.md"))
+    all_files = sorted(root.rglob("*.md"))
+    # Non-builtin first so user skills override shipped builtins on name collision.
+    files = [f for f in all_files if not _is_builtin(f)]
+    files += [f for f in all_files if _is_builtin(f)]
     seen: dict[str, Skill] = {}
     for path in files:
         try:
