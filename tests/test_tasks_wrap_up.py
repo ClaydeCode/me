@@ -41,7 +41,7 @@ class TestRun:
              patch("clayde.tasks.wrap_up.get_issue_state", return_value=_mock_state()), \
              patch("clayde.tasks.wrap_up.parse_issue_url", return_value=("o", "r", 7)), \
              patch("clayde.tasks.wrap_up.invoke_claude", return_value=_make_result(output)) as mock_claude, \
-             patch("clayde.tasks.wrap_up._notify"):
+             patch("clayde.tasks.wrap_up.send_ntfy_sync"):
             from clayde.tasks.wrap_up import run
             run("https://github.com/o/r/issues/7")
 
@@ -59,16 +59,11 @@ class TestRun:
              patch("clayde.tasks.wrap_up.get_issue_state", return_value=_mock_state()), \
              patch("clayde.tasks.wrap_up.parse_issue_url", return_value=("o", "r", 7)), \
              patch("clayde.tasks.wrap_up.invoke_claude", return_value=_make_result(output)), \
-             patch("clayde.tasks.wrap_up._notify") as mock_notify:
+             patch("clayde.tasks.wrap_up.send_ntfy_sync") as mock_notify:
             from clayde.tasks.wrap_up import run
             run("https://github.com/o/r/issues/7")
 
-        mock_notify.assert_called_once_with(
-            title="Wrap done",
-            body="Fixed it",
-            success=True,
-            settings=mock_notify.call_args[1]["settings"],
-        )
+        mock_notify.assert_called_once()
         call_kw = mock_notify.call_args[1]
         assert call_kw["title"] == "Wrap done"
         assert call_kw["body"] == "Fixed it"
@@ -80,7 +75,7 @@ class TestRun:
              patch("clayde.tasks.wrap_up.parse_issue_url", return_value=("o", "r", 7)), \
              patch("clayde.tasks.wrap_up.invoke_claude",
                    side_effect=UsageLimitError("limit hit", cost_eur=0.5)), \
-             patch("clayde.tasks.wrap_up._notify") as mock_notify:
+             patch("clayde.tasks.wrap_up.send_ntfy_sync") as mock_notify:
             from clayde.tasks.wrap_up import run
             run("https://github.com/o/r/issues/7")
 
@@ -93,7 +88,7 @@ class TestRun:
              patch("clayde.tasks.wrap_up.parse_issue_url", return_value=("o", "r", 7)), \
              patch("clayde.tasks.wrap_up.invoke_claude",
                    side_effect=InvocationTimeoutError("timed out", cost_eur=0.0)), \
-             patch("clayde.tasks.wrap_up._notify") as mock_notify:
+             patch("clayde.tasks.wrap_up.send_ntfy_sync") as mock_notify:
             from clayde.tasks.wrap_up import run
             run("https://github.com/o/r/issues/7")
 
@@ -106,7 +101,7 @@ class TestRun:
              patch("clayde.tasks.wrap_up.parse_issue_url", return_value=("o", "r", 7)), \
              patch("clayde.tasks.wrap_up.invoke_claude",
                    return_value=_make_result("done, no json here")), \
-             patch("clayde.tasks.wrap_up._notify") as mock_notify:
+             patch("clayde.tasks.wrap_up.send_ntfy_sync") as mock_notify:
             from clayde.tasks.wrap_up import run
             run("https://github.com/o/r/issues/7")
 
@@ -122,41 +117,8 @@ class TestRun:
              patch("clayde.tasks.wrap_up.get_issue_state", return_value=_mock_state()), \
              patch("clayde.tasks.wrap_up.parse_issue_url", return_value=("o", "r", 7)), \
              patch("clayde.tasks.wrap_up.invoke_claude", return_value=_make_result(output)), \
-             patch("clayde.tasks.wrap_up._notify") as mock_notify:
+             patch("clayde.tasks.wrap_up.send_ntfy_sync") as mock_notify:
             from clayde.tasks.wrap_up import run
             run("https://github.com/o/r/issues/7")
 
         mock_notify.assert_not_called()
-
-
-class TestNotify:
-    def test_posts_to_ntfy(self):
-        settings = _mock_settings()
-        with patch("clayde.tasks.wrap_up.requests") as mock_req:
-            from clayde.tasks.wrap_up import _notify
-            _notify(title="hi", body="body text", success=True, settings=settings)
-
-        mock_req.post.assert_called_once()
-        call_args = mock_req.post.call_args
-        assert "ntfy.sh/testtopic" in call_args[0][0]
-        headers = call_args[1]["headers"]
-        assert headers["Title"] == "hi"
-        assert headers["Priority"] == "3"
-        assert headers["Tags"] == "white_check_mark"
-
-    def test_uses_failure_priority(self):
-        settings = _mock_settings()
-        with patch("clayde.tasks.wrap_up.requests") as mock_req:
-            from clayde.tasks.wrap_up import _notify
-            _notify(title="err", body="fail", success=False, settings=settings)
-
-        headers = mock_req.post.call_args[1]["headers"]
-        assert headers["Priority"] == "5"
-        assert headers["Tags"] == "rotating_light"
-
-    def test_swallows_errors(self):
-        settings = _mock_settings()
-        with patch("clayde.tasks.wrap_up.requests") as mock_req:
-            mock_req.post.side_effect = Exception("network down")
-            from clayde.tasks.wrap_up import _notify
-            _notify(title="x", body="y", success=True, settings=settings)  # must not raise

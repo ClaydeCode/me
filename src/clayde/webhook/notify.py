@@ -58,6 +58,40 @@ class NotificationPayload(BaseModel):
         return v[:300] if isinstance(v, str) else v
 
 
+def send_ntfy_sync(
+    *,
+    title: str,
+    body: str,
+    success: bool,
+    base_url: str,
+    topic: str,
+    timeout_s: int,
+) -> None:
+    """Synchronous POST to ntfy.sh. Best-effort: errors are logged, never raised."""
+    url = f"{base_url.rstrip('/')}/{topic}"
+    headers = {
+        "Title": _encode_header_value(title[:40]),
+        "Priority": "3" if success else "5",
+        "Tags": "white_check_mark" if success else "rotating_light",
+    }
+    tracer = get_tracer()
+    with tracer.start_as_current_span("clayde.pebble.notify") as span:
+        span.set_attribute("pebble.notify_topic", topic)
+        span.set_attribute("pebble.notify_title", title)
+        span.set_attribute("pebble.outcome_success", success)
+        try:
+            with httpx.Client(timeout=timeout_s) as client:
+                resp = client.post(url, content=body[:300], headers=headers)
+            span.set_attribute("pebble.notify_http_status", resp.status_code)
+            span.set_attribute("pebble.notify_ok", 200 <= resp.status_code < 300)
+            if resp.status_code >= 400:
+                log.warning("ntfy returned %d: %s", resp.status_code, resp.text[:200])
+        except Exception as exc:
+            span.set_attribute("pebble.notify_ok", False)
+            span.set_attribute("pebble.notify_error", type(exc).__name__)
+            log.warning("ntfy POST failed: %s", exc)
+
+
 async def send_ntfy(
     *,
     title: str,

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
-
-import requests
 
 from clayde.claude import InvocationTimeoutError, UsageLimitError, invoke_claude
 from clayde.config import get_settings
@@ -14,6 +13,7 @@ from clayde.prompts import render_template
 from clayde.responses import WrapUpResponse, parse_response
 from clayde.state import get_issue_state
 from clayde.telemetry import get_tracer
+from clayde.webhook.notify import send_ntfy_sync
 
 log = logging.getLogger("clayde.tasks.wrap_up")
 
@@ -34,6 +34,9 @@ def run(issue_url: str) -> None:
         )
         branch_name = issue_state.get("branch_name", f"clayde/issue-{number}")
 
+        words = re.sub(r"[^a-z0-9\s]", "", title.lower()).split()[:3]
+        title_slug = "-".join(words) if words else "issue"
+
         span.set_attribute("issue.number", number)
         span.set_attribute("issue.owner", owner)
         span.set_attribute("issue.repo", repo)
@@ -51,6 +54,7 @@ def run(issue_url: str) -> None:
             issue_url=issue_url,
             kb_path=settings.kb_path,
             today=date.today().isoformat(),
+            topic=title_slug,
         )
 
         ntfy_title = f"Wrapped up: {owner}/{repo}#{number}"
@@ -81,22 +85,11 @@ def run(issue_url: str) -> None:
             ntfy_body = str(e)[:300]
 
         if settings.ntfy_topic:
-            _notify(title=ntfy_title, body=ntfy_body, success=success, settings=settings)
-
-
-def _notify(*, title: str, body: str, success: bool, settings) -> None:
-    """Best-effort synchronous ntfy POST. Errors are logged, never raised."""
-    url = f"{settings.ntfy_base_url.rstrip('/')}/{settings.ntfy_topic}"
-    try:
-        requests.post(
-            url,
-            data=body[:300].encode(),
-            headers={
-                "Title": title[:40],
-                "Priority": "3" if success else "5",
-                "Tags": "white_check_mark" if success else "rotating_light",
-            },
-            timeout=settings.ntfy_timeout_s,
-        )
-    except Exception as exc:
-        log.warning("ntfy POST failed: %s", exc)
+            send_ntfy_sync(
+                title=ntfy_title,
+                body=ntfy_body,
+                success=success,
+                base_url=settings.ntfy_base_url,
+                topic=settings.ntfy_topic,
+                timeout_s=settings.ntfy_timeout_s,
+            )
