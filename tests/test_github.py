@@ -20,6 +20,7 @@ from clayde.github import (
     get_pr_review_comments,
     get_pr_reviews,
     is_blocked,
+    is_pull_request_item,
     parse_issue_url,
     parse_pr_url,
     post_comment,
@@ -52,6 +53,23 @@ class TestParsePrUrl:
     def test_invalid_url_raises(self):
         with pytest.raises(ValueError, match="Cannot parse PR URL"):
             parse_pr_url("https://github.com/alice/repo/issues/1")
+
+
+class TestIsPullRequestItem:
+    def test_returns_true_for_pr_url(self):
+        item = MagicMock()
+        item.html_url = "https://github.com/o/r/pull/80"
+        assert is_pull_request_item(item) is True
+
+    def test_returns_false_for_issue_url(self):
+        item = MagicMock()
+        item.html_url = "https://github.com/o/r/issues/1"
+        assert is_pull_request_item(item) is False
+
+    def test_returns_false_for_arbitrary_url(self):
+        item = MagicMock()
+        item.html_url = "https://github.com/o/r"
+        assert is_pull_request_item(item) is False
 
 
 class TestFetchIssue:

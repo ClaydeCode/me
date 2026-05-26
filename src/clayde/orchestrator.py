@@ -37,13 +37,14 @@ from clayde.github import (
     get_pr_review_comments,
     get_pr_reviews,
     is_blocked,
+    is_pull_request_item,
     issue_ref,
     parse_issue_url,
     parse_pr_url,
 )
-from clayde.safety import get_new_visible_comments, has_visible_content
+from clayde.safety import filter_pr_reviews, get_new_visible_comments, has_visible_content
 from clayde.state import get_issue_state, load_state, save_state, update_issue_state
-from clayde.tasks import work
+from clayde.tasks import pr_work, work
 from clayde.telemetry import get_tracer, init_tracer
 
 log = logging.getLogger("clayde.orchestrator")
@@ -173,6 +174,95 @@ def _handle_issue(g: Github, issue: Issue, url: str) -> None:
         log.info("[%s] Cycle complete", label)
 
 
+def _handle_standalone_pr(g: Github, url: str) -> None:
+    """Handle an assigned PR that has no parent tracked issue.
+
+    Checks for new review activity from whitelisted users and invokes Claude
+    to address it.  State is keyed by the PR url.
+    """
+    tracer = get_tracer()
+    with tracer.start_as_current_span("clayde.handle_standalone_pr", attributes={"pr.url": url}) as span:
+        owner, repo, pr_number = parse_pr_url(url)
+        ref = issue_ref(owner, repo, pr_number)
+
+        pr_state = get_issue_state(url)
+        in_progress = pr_state.get("in_progress", False)
+        last_seen_at = _parse_timestamp(pr_state.get("last_seen_at"))
+
+        # Check for new review activity from whitelisted users
+        has_new_review_activity = False
+        try:
+            reviews = get_pr_reviews(g, owner, repo, pr_number)
+            review_comments = get_pr_review_comments(g, owner, repo, pr_number)
+            github_username = get_settings().github_username
+            visible_reviews = filter_pr_reviews(reviews, github_username)
+
+            if last_seen_at is not None:
+                new_reviews = [r for r in visible_reviews if r.submitted_at > last_seen_at]
+            else:
+                new_reviews = list(visible_reviews)
+
+            if new_reviews:
+                new_review_ids = {r.id for r in new_reviews}
+                has_inline = any(
+                    rc.pull_request_review_id in new_review_ids
+                    for rc in review_comments
+                )
+                has_bodies = any(r.body and r.body.strip() for r in new_reviews)
+                if has_inline or has_bodies:
+                    has_new_review_activity = True
+                else:
+                    # Pure approval with no comments — update timestamp only
+                    log.info("[%s] Pure PR approval — updating last_seen_at", ref)
+                    update_issue_state(url, {"last_seen_at": _now_utc()})
+                    span.set_attribute("pr.skip_reason", "pure_approval")
+                    return
+        except Exception as e:
+            log.warning("[%s] Failed to check PR reviews: %s", ref, e)
+
+        should_invoke = in_progress or has_new_review_activity
+
+        if not should_invoke:
+            log.info("[%s] No new review activity — skipping", ref)
+            span.set_attribute("pr.skip_reason", "no_new_activity")
+            return
+
+        # Mark in_progress before invoking Claude
+        update_issue_state(url, {"in_progress": True, "owner": owner, "repo": repo, "number": pr_number})
+
+        log.info("[%s] New review activity — invoking PR work task", ref)
+        try:
+            pr_work.run(url)
+        except (UsageLimitError, InvocationTimeoutError) as e:
+            log.warning("[%s] Usage/timeout limit — will retry next cycle: %s", ref, e)
+            span.set_attribute("pr.status", "retry")
+            return
+        except Exception as e:
+            log.error("[%s] ERROR in PR work task: %s", ref, e)
+            span.set_status(StatusCode.ERROR, str(e))
+            span.record_exception(e)
+            update_issue_state(url, {"in_progress": False})
+            return
+
+        update_issue_state(url, {"in_progress": False, "last_seen_at": _now_utc()})
+        span.set_attribute("pr.status", "completed")
+        log.info("[%s] PR cycle complete", ref)
+
+
+def _is_pr_tracked_as_issue(pr_url: str, issues_state: dict) -> bool:
+    """Return True if pr_url is already tracked as the child PR of a known issue.
+
+    When Clayde opens a PR while working on an issue, the PR URL is stored
+    under the *issue* state entry as ``pr_url``.  In that case the issue
+    handler owns review activity for the PR, so the standalone-PR handler
+    should skip it.
+    """
+    return any(
+        ist.get("pr_url") == pr_url
+        for ist in issues_state.values()
+    )
+
+
 def _prune_closed_issues(g: Github, issues_state: dict) -> None:
     """Remove closed issues from state to prevent stale entries accumulating."""
     to_prune = []
@@ -240,17 +330,26 @@ def main():
         issues_state = load_state().get("issues", {})
 
         if not assigned:
-            log.info("No assigned issues. Going back to sleep.")
+            log.info("No assigned work items. Going back to sleep.")
             provider.force_flush()
             return
 
-        processed = 0
-        for issue in assigned:
-            url = issue.html_url
-            processed += 1
-            _handle_issue(g, issue, url)
+        issues_count = 0
+        prs_count = 0
+        for item in assigned:
+            url = item.html_url
+            if is_pull_request_item(item):
+                # Only handle PRs that are NOT already tracked as children of a
+                # known issue (those are handled via _handle_issue).
+                if not _is_pr_tracked_as_issue(url, issues_state):
+                    prs_count += 1
+                    _handle_standalone_pr(g, url)
+            else:
+                issues_count += 1
+                _handle_issue(g, item, url)
 
-        tick_span.set_attribute("issues.processed", processed)
+        tick_span.set_attribute("issues.processed", issues_count)
+        tick_span.set_attribute("prs.processed", prs_count)
 
     provider.force_flush()
 
