@@ -53,7 +53,7 @@ src/clayde/
   git.py                # ensure_repo() — clone or update repos under REPOS_DIR
   safety.py             # Content filtering & plan approval: is_comment_visible(),
                         #   filter_comments(), is_issue_visible(),
-                        #   has_visible_content(), is_plan_approved()
+                        #   get_new_visible_comments(), has_visible_content()
   responses.py          # Pydantic response models + parse_response() for structured JSON
   claude.py             # invoke_claude(prompt, repo_path) — dual backend:
                         #   ApiBackend (Anthropic SDK tool-use loop) or
@@ -62,17 +62,11 @@ src/clayde/
                         #   FileSpanExporter (JSONL)
   orchestrator.py       # main() — single cycle, run_loop() — container entry point
   prompts/
-    preliminary_plan.j2 # Jinja2 template for short preliminary plan
-    thorough_plan.j2    # Jinja2 template for detailed thorough plan
-    update_plan.j2      # Jinja2 template for updating a plan on new comments
-    implement.j2        # Jinja2 template for implement prompt
-    address_review.j2   # Jinja2 template for addressing PR review comments
-    plan.j2             # Legacy template (kept for reference)
+    work.j2             # Jinja2 template for the unified work prompt
   tasks/
     __init__.py
-    plan.py             # run_preliminary(url), run_thorough(url), run_update(url, phase)
-    implement.py        # run(issue_url) — implement + open PR + assign reviewer
-    review.py           # run(issue_url) — address PR review comments
+    work.py             # run(issue_url) — unified: Claude decides next action
+                        #   (ask, plan, implement, open PR, or address review)
   webhook/
     __init__.py
     app.py              # FastAPI app, /webhook/pebble, /health, OTel enqueue span
@@ -129,43 +123,36 @@ Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at sta
 
 ---
 
-## State Machine
+## Work Loop (event-driven)
 
-Issue lifecycle stored in `state.json` under `{"issues": {"<html_url>": {...}}}`.
+There is no rigid status state machine. Each tick, the orchestrator iterates
+the issues assigned to the bot and, for each, decides whether anything has
+happened since last cycle. If so, it hands the issue to the unified **work
+task**, which lets Claude choose the next action — ask questions, post a
+plan, implement, open a PR, or address review comments.
 
-```
-(none) → preliminary_planning → awaiting_preliminary_approval
-       → planning → awaiting_plan_approval → implementing → pr_open → done
-                                                                    ↘ failed
-```
+Per-issue state is stored in `state.json` under
+`{"issues": {"<html_url>": {...}}}`. Fields written by the current code:
 
-New comments in `awaiting_preliminary_approval` or `awaiting_plan_approval`
-trigger plan updates (edit existing plan comment + post change summary).
+| Field | Meaning |
+|-------|---------|
+| `owner`, `repo`, `number` | Issue identity |
+| `issue_title` | Title (for log labels) |
+| `branch_name` | Working branch (`clayde/issue-<N>` by default) |
+| `pr_url` | PR opened for this issue, once detected via `find_open_pr()` |
+| `in_progress` | `True` while the work task runs; a crash leaves it set so the next cycle retries |
+| `last_seen_at` | ISO-UTC timestamp of the last completed cycle; used to detect new activity |
 
-PR reviews in `pr_open` trigger `addressing_review` → back to `pr_open`.
+**Activity detection** (`_handle_issue`): the work task is invoked when any of
+— `in_progress` is set (retry), `last_seen_at` is `None` (never processed),
+there are new whitelist-visible comments, or there is new PR review activity
+(inline comments or a review body). A pure PR approval with no comments does
+**not** invoke Claude — it just advances `last_seen_at`.
 
-| Status | Meaning |
-|--------|---------|
-| `preliminary_planning` | Claude is producing a short preliminary plan |
-| `awaiting_preliminary_approval` | Preliminary plan posted; waiting for 👍 |
-| `planning` | Claude is producing a thorough implementation plan |
-| `awaiting_plan_approval` | Thorough plan posted; waiting for 👍 |
-| `implementing` | Claude is implementing the approved plan |
-| `pr_open` | PR exists; monitoring for review comments |
-| `addressing_review` | Claude is addressing review comments |
-| `done` | PR approved or complete; issue finished |
-| `failed` | Error during any phase; cleared manually to retry |
-| `interrupted` | Claude usage/rate limit hit mid-task; retried automatically |
-
-State entries store: `owner`, `repo`, `number`, `preliminary_comment_id`,
-`plan_comment_id`, `pr_url`, `branch_name`, `last_seen_comment_id`,
-`last_seen_review_id`.
-
-Interrupted entries also store: `interrupted_phase` (`"preliminary_planning"`,
-`"planning"`, `"implementing"`, or `"addressing_review"`).
-
-Backward compatibility: old `awaiting_approval` status is mapped to
-`awaiting_plan_approval`.
+**Limits & retries**: `UsageLimitError` / `InvocationTimeoutError` from Claude
+leave `in_progress=True` so the next cycle retries automatically. Other
+exceptions clear `in_progress` and log the error. Closed issues are pruned
+from state at the start of each tick.
 
 ---
 
@@ -182,8 +169,9 @@ but:
 2. **No visible content** → issue is skipped. If the issue body and all
    comments are from non-whitelisted users without any whitelisted 👍, there
    is nothing for the LLM to work with.
-3. **Plan approval gates** remain: preliminary plan needs 👍 to proceed to
-   thorough plan; thorough plan needs 👍 to proceed to implementation.
+
+Only whitelist-visible content reaches the LLM; Claude decides within the work
+task whether it has enough to plan, implement, or must ask first.
 
 Whitelisted users: configured via `CLAYDE_WHITELISTED_USERS` in `data/config.env`.
 
@@ -241,62 +229,36 @@ Key functions:
 - `is_comment_visible(comment)` — True if comment author is whitelisted OR has 👍 from whitelisted user.
 - `filter_comments(comments)` — returns only visible comments.
 - `is_issue_visible(issue)` — True if issue author is whitelisted OR has 👍 from whitelisted user.
+- `get_new_visible_comments(comments, last_seen_at)` — visible comments created after `last_seen_at`.
 - `has_visible_content(issue, comments)` — True if there is any visible content at all.
-- `is_plan_approved(g, owner, repo, number, comment_id)` — True if a whitelisted user reacted +1 to the plan comment.
 
 ---
 
-## Plan Task (`tasks/plan.py`)
+## Work Task (`tasks/work.py`)
 
-Two-phase planning with update support:
+A single `run(issue_url)` handles every phase. There is no separate
+plan/implement/review task — Claude decides what to do from the context it is
+given.
 
-### Phase 1: Preliminary Plan (`run_preliminary`)
-1. Fetch issue metadata and filtered comments
-2. `ensure_repo()` to have the code on disk
-3. Build prompt with filtered issue body, labels, visible comments, repo path
-4. `invoke_claude()` — Claude explores the repo and returns a short overview with questions
-5. Post preliminary plan as issue comment
-6. Set status → `awaiting_preliminary_approval`
+1. `fetch_issue()` + `get_default_branch()`; `ensure_repo()` resets the clone
+   to the latest default branch.
+2. Persist issue metadata and `branch_name` to state.
+3. Gather context: whitelist-filtered comments, and — if a PR already exists —
+   its review bodies and inline review comments.
+4. Render `work.j2` with the issue body, labels, comments, review text, repo
+   path, `branch_name`, `pr_url`, and `default_branch`.
+5. `invoke_claude()` — Claude explores, then takes whatever action fits: post
+   a plan/question comment, implement and push, open a PR via `gh pr create`,
+   or push fixes addressing review comments. It returns a JSON `{summary}`
+   (`WorkResponse`).
+6. Post the `summary` as an issue comment (best-effort: raw output snippet if
+   JSON parsing fails).
+7. Detect a PR via `find_open_pr(branch_name)`. On first detection, **assign
+   the issue author as reviewer**; persist `pr_url` to state.
 
-### Phase 2: Thorough Plan (`run_thorough`)
-1. Fetch preliminary plan comment and discussion after it
-2. Build prompt including preliminary plan + discussion
-3. `invoke_claude()` — Claude produces the full detailed plan
-4. Post thorough plan as issue comment
-5. Set status → `awaiting_plan_approval`
-
-### Plan Updates (`run_update`)
-Triggered when new visible comments are detected in `awaiting_preliminary_approval`
-or `awaiting_plan_approval` states:
-1. Fetch new visible comments since `last_seen_comment_id`
-2. Build update prompt with current plan + new comments
-3. `invoke_claude()` — Claude produces summary + updated plan
-4. **Edit** the existing plan comment AND **post** a new comment with change summary
-
----
-
-## Implementation Task (`tasks/implement.py`)
-
-1. Fetch plan comment text and filtered discussion comments after the plan
-2. `ensure_repo()` to reset to latest default branch
-3. Build prompt with issue body, plan, discussion, repo path
-4. `invoke_claude()` — Claude creates a branch, implements, commits, and pushes
-5. Python code creates PR via PyGitHub or finds an existing one
-6. **Assign the issue author as PR reviewer** via `add_pr_reviewer()`
-7. Post result comment on issue; set status → `pr_open`
-
----
-
-## Review Task (`tasks/review.py`)
-
-Handles PR review comments after implementation:
-
-1. Fetch PR reviews and review comments via PyGitHub
-2. Filter to new reviews since `last_seen_review_id`, ignoring own reviews
-3. If reviews have comments/body: invoke Claude with `address_review.j2` prompt
-4. Claude makes changes and pushes to the existing branch
-5. Post summary comment on issue; update `last_seen_review_id`; status stays `pr_open`
-6. If a review is "APPROVED" with no comments: set status → `done`
+Plans and questions are ordinary issue comments — there is no separate
+approval gate or 👍 reaction required to advance. Iteration happens through
+the normal comment/review activity-detection loop.
 
 ---
 
@@ -304,7 +266,7 @@ Handles PR review comments after implementation:
 
 Format: `[YYYY-MM-DD HH:MM:SS] [clayde.<module>] <message>`
 File: `/data/logs/agent.log` (appended)
-Logger names: `clayde.orchestrator`, `clayde.tasks.plan`, `clayde.tasks.implement`, `clayde.tasks.review`, `clayde.github`, `clayde.claude`
+Logger names: `clayde.orchestrator`, `clayde.tasks.work`, `clayde.github`, `clayde.claude`, `clayde.git`, `clayde.state`
 
 ---
 
