@@ -1,5 +1,6 @@
 """Tests for clayde.orchestrator — event-driven loop."""
 
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -24,66 +25,60 @@ def _mock_settings(enabled=False, github_token="tok", github_username="ClaydeCod
     return s
 
 
+@contextmanager
+def _patched_main(enabled=True, claude_available=True, assigned=(), state=None):
+    """Patch every external dependency `main()` touches.
+
+    Yields a dict of name → mock so individual tests can assert on call behavior.
+    """
+    targets = {
+        "get_settings": {"return_value": _mock_settings(enabled=enabled)},
+        "setup_logging": {},
+        "init_tracer": {},
+        "_configure_global_git_identity": {},
+        "is_claude_available": {"return_value": claude_available},
+        "get_github_client": {},
+        "get_assigned_issues": {"return_value": list(assigned)},
+        "load_state": {"return_value": state if state is not None else {"issues": {}}},
+        "_prune_closed_issues": {},
+        "_handle_issue": {},
+    }
+    with ExitStack() as stack:
+        yield {
+            name: stack.enter_context(patch(f"clayde.orchestrator.{name}", **kwargs))
+            for name, kwargs in targets.items()
+        }
+
+
 class TestMain:
     def test_exits_when_disabled(self):
-        with patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=False)):
+        with _patched_main(enabled=False):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
 
     def test_returns_when_claude_unavailable(self):
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator._configure_global_git_identity"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=False), \
-             patch("clayde.orchestrator.get_github_client") as mock_gc:
+        with _patched_main(claude_available=False) as mocks:
             main()
-            mock_gc.assert_not_called()
+            mocks["get_github_client"].assert_not_called()
 
     def test_returns_when_no_assigned_issues(self):
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator._configure_global_git_identity"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[]), \
-             patch("clayde.orchestrator.load_state", return_value={"issues": {}}):
+        with _patched_main(assigned=[]):
             main()
 
     def test_calls_handle_issue_for_each_assigned(self):
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator._configure_global_git_identity"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
-             patch("clayde.orchestrator._prune_closed_issues"), \
-             patch("clayde.orchestrator._handle_issue") as mock_handle:
+        with _patched_main(assigned=[issue]) as mocks:
             main()
-            mock_handle.assert_called_once()
+            mocks["_handle_issue"].assert_called_once()
 
     def test_main_calls_prune(self):
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator._configure_global_git_identity"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
-             patch("clayde.orchestrator._prune_closed_issues") as mock_prune, \
-             patch("clayde.orchestrator._handle_issue"):
+        with _patched_main(assigned=[issue]) as mocks:
             main()
-            mock_prune.assert_called_once()
+            mocks["_prune_closed_issues"].assert_called_once()
 
 
 class TestHandleIssue:
