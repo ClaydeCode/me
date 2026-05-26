@@ -1,5 +1,6 @@
 """Tests for clayde.orchestrator — event-driven loop."""
 
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +8,8 @@ import pytest
 
 from clayde.orchestrator import (
     _handle_issue,
+    _handle_standalone_pr,
+    _is_pr_tracked_as_issue,
     _now_utc,
     _parse_timestamp,
     _prune_closed_issues,
@@ -19,65 +22,65 @@ def _mock_settings(enabled=False, github_token="tok", github_username="ClaydeCod
     s.enabled = enabled
     s.github_token = github_token
     s.github_username = github_username
+    s.effective_git_name = "Test Bot"
+    s.git_email = "test@example.com"
     return s
+
+
+@contextmanager
+def _patched_main(enabled=True, claude_available=True, assigned=(), state=None):
+    """Patch every external dependency `main()` touches.
+
+    Yields a dict of name → mock so individual tests can assert on call behavior.
+    """
+    targets = {
+        "get_settings": {"return_value": _mock_settings(enabled=enabled)},
+        "setup_logging": {},
+        "init_tracer": {},
+        "_configure_global_git_identity": {},
+        "is_claude_available": {"return_value": claude_available},
+        "get_github_client": {},
+        "get_assigned_issues": {"return_value": list(assigned)},
+        "load_state": {"return_value": state if state is not None else {"issues": {}}},
+        "_prune_closed_issues": {},
+        "_handle_issue": {},
+    }
+    with ExitStack() as stack:
+        yield {
+            name: stack.enter_context(patch(f"clayde.orchestrator.{name}", **kwargs))
+            for name, kwargs in targets.items()
+        }
 
 
 class TestMain:
     def test_exits_when_disabled(self):
-        with patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=False)):
+        with _patched_main(enabled=False):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 0
 
     def test_returns_when_claude_unavailable(self):
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=False), \
-             patch("clayde.orchestrator.get_github_client") as mock_gc:
+        with _patched_main(claude_available=False) as mocks:
             main()
-            mock_gc.assert_not_called()
+            mocks["get_github_client"].assert_not_called()
 
     def test_returns_when_no_assigned_issues(self):
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[]), \
-             patch("clayde.orchestrator.load_state", return_value={"issues": {}}):
+        with _patched_main(assigned=[]):
             main()
 
     def test_calls_handle_issue_for_each_assigned(self):
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
-             patch("clayde.orchestrator._prune_closed_issues"), \
-             patch("clayde.orchestrator._handle_issue") as mock_handle:
+        with _patched_main(assigned=[issue]) as mocks:
             main()
-            mock_handle.assert_called_once()
+            mocks["_handle_issue"].assert_called_once()
 
     def test_main_calls_prune(self):
         issue = MagicMock()
         issue.html_url = "https://github.com/o/r/issues/1"
-        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
-             patch("clayde.orchestrator.setup_logging"), \
-             patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
-             patch("clayde.orchestrator.get_github_client"), \
-             patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
-             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
-             patch("clayde.orchestrator._prune_closed_issues") as mock_prune, \
-             patch("clayde.orchestrator._handle_issue"):
+        with _patched_main(assigned=[issue]) as mocks:
             main()
-            mock_prune.assert_called_once()
+            mocks["_prune_closed_issues"].assert_called_once()
 
 
 class TestHandleIssue:
@@ -353,6 +356,237 @@ class TestPruneClosedIssues:
             saved = mock_save.call_args[0][0]
             assert url1 not in saved["issues"]
             assert url2 not in saved["issues"]
+
+
+class TestIsPrTrackedAsIssue:
+    def test_returns_true_when_pr_url_matches_issue_state(self):
+        issues_state = {
+            "https://github.com/o/r/issues/1": {
+                "pr_url": "https://github.com/o/r/pull/5"
+            }
+        }
+        assert _is_pr_tracked_as_issue("https://github.com/o/r/pull/5", issues_state)
+
+    def test_returns_false_when_no_match(self):
+        issues_state = {
+            "https://github.com/o/r/issues/1": {
+                "pr_url": "https://github.com/o/r/pull/5"
+            }
+        }
+        assert not _is_pr_tracked_as_issue("https://github.com/o/r/pull/99", issues_state)
+
+    def test_returns_false_for_empty_state(self):
+        assert not _is_pr_tracked_as_issue("https://github.com/o/r/pull/5", {})
+
+    def test_returns_false_when_state_has_no_pr_url(self):
+        issues_state = {
+            "https://github.com/o/r/issues/1": {"owner": "o", "repo": "r", "number": 1}
+        }
+        assert not _is_pr_tracked_as_issue("https://github.com/o/r/pull/5", issues_state)
+
+
+class TestMainDispatch:
+    """Tests that main() correctly dispatches issues vs standalone PRs."""
+
+    def test_dispatches_issue_to_handle_issue(self):
+        item = MagicMock()
+        item.html_url = "https://github.com/o/r/issues/1"
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
+             patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.get_github_client"), \
+             patch("clayde.orchestrator.get_assigned_issues", return_value=[item]), \
+             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
+             patch("clayde.orchestrator._prune_closed_issues"), \
+             patch("clayde.orchestrator.is_pull_request_item", return_value=False), \
+             patch("clayde.orchestrator._handle_issue") as mock_issue, \
+             patch("clayde.orchestrator._handle_standalone_pr") as mock_pr:
+            main()
+        mock_issue.assert_called_once()
+        mock_pr.assert_not_called()
+
+    def test_dispatches_standalone_pr_to_handle_standalone_pr(self):
+        item = MagicMock()
+        item.html_url = "https://github.com/o/r/pull/80"
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
+             patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.get_github_client"), \
+             patch("clayde.orchestrator.get_assigned_issues", return_value=[item]), \
+             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
+             patch("clayde.orchestrator._prune_closed_issues"), \
+             patch("clayde.orchestrator.is_pull_request_item", return_value=True), \
+             patch("clayde.orchestrator._is_pr_tracked_as_issue", return_value=False), \
+             patch("clayde.orchestrator._handle_issue") as mock_issue, \
+             patch("clayde.orchestrator._handle_standalone_pr") as mock_pr:
+            main()
+        mock_issue.assert_not_called()
+        mock_pr.assert_called_once()
+
+    def test_skips_pr_already_tracked_as_issue(self):
+        item = MagicMock()
+        item.html_url = "https://github.com/o/r/pull/5"
+        with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
+             patch("clayde.orchestrator.setup_logging"), \
+             patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.get_github_client"), \
+             patch("clayde.orchestrator.get_assigned_issues", return_value=[item]), \
+             patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
+             patch("clayde.orchestrator._prune_closed_issues"), \
+             patch("clayde.orchestrator.is_pull_request_item", return_value=True), \
+             patch("clayde.orchestrator._is_pr_tracked_as_issue", return_value=True), \
+             patch("clayde.orchestrator._handle_issue") as mock_issue, \
+             patch("clayde.orchestrator._handle_standalone_pr") as mock_pr:
+            main()
+        mock_issue.assert_not_called()
+        mock_pr.assert_not_called()
+
+
+class TestHandleStandalonePr:
+    PR_URL = "https://github.com/o/r/pull/80"
+
+    def _mock_settings(self, username="ClaydeCode"):
+        s = MagicMock()
+        s.github_username = username
+        return s
+
+    def test_skips_when_no_review_activity(self):
+        ts = "2024-01-01T12:00:00+00:00"
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state", return_value={"last_seen_at": ts}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        mock_pr_work.run.assert_not_called()
+
+    def test_invokes_pr_work_on_new_review(self):
+        ts = "2024-01-01T12:00:00+00:00"
+        review = MagicMock()
+        review.submitted_at = datetime(2024, 2, 1, tzinfo=timezone.utc)
+        review.body = "Please fix this"
+        review.id = 1
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state", return_value={"last_seen_at": ts}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        mock_pr_work.run.assert_called_once_with(self.PR_URL)
+
+    def test_invokes_on_first_time_with_reviews(self):
+        """No last_seen_at + reviews present → invoke."""
+        review = MagicMock()
+        review.body = "Add tests"
+        review.id = 42
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state", return_value={}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        mock_pr_work.run.assert_called_once_with(self.PR_URL)
+
+    def test_skips_on_first_time_with_no_reviews(self):
+        """No last_seen_at + no reviews → skip (nothing to address yet)."""
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state", return_value={}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        mock_pr_work.run.assert_not_called()
+
+    def test_retries_when_in_progress(self):
+        """in_progress=True → always invoke (crash recovery)."""
+        ts = "2024-01-01T12:00:00+00:00"
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state",
+                   return_value={"last_seen_at": ts, "in_progress": True}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        mock_pr_work.run.assert_called_once_with(self.PR_URL)
+
+    def test_pure_approval_updates_timestamp_only(self):
+        """Review with no body/comments but approval state → update last_seen_at, no Claude."""
+        ts = "2024-01-01T12:00:00+00:00"
+        review = MagicMock()
+        review.submitted_at = datetime(2024, 2, 1, tzinfo=timezone.utc)
+        review.body = ""
+        review.id = 1
+        calls = []
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state", return_value={"last_seen_at": ts}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.update_issue_state",
+                   side_effect=lambda url, upd: calls.append(upd)), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        mock_pr_work.run.assert_not_called()
+        assert any("last_seen_at" in c for c in calls)
+
+    def test_clears_in_progress_on_unexpected_error(self):
+        ts = "2024-01-01T12:00:00+00:00"
+        review = MagicMock()
+        review.submitted_at = datetime(2024, 2, 1, tzinfo=timezone.utc)
+        review.body = "Fix it"
+        review.id = 1
+        calls = []
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state", return_value={"last_seen_at": ts}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.update_issue_state",
+                   side_effect=lambda url, upd: calls.append(upd)), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            mock_pr_work.run.side_effect = RuntimeError("boom")
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        assert any(c.get("in_progress") is False for c in calls)
+
+    def test_leaves_in_progress_on_usage_limit(self):
+        from clayde.claude import UsageLimitError
+        ts = "2024-01-01T12:00:00+00:00"
+        review = MagicMock()
+        review.submitted_at = datetime(2024, 2, 1, tzinfo=timezone.utc)
+        review.body = "Fix it"
+        review.id = 1
+        calls = []
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 80)), \
+             patch("clayde.orchestrator.get_issue_state", return_value={"last_seen_at": ts}), \
+             patch("clayde.orchestrator.get_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_pr_review_comments", return_value=[]), \
+             patch("clayde.orchestrator.filter_pr_reviews", return_value=[review]), \
+             patch("clayde.orchestrator.get_settings", return_value=self._mock_settings()), \
+             patch("clayde.orchestrator.update_issue_state",
+                   side_effect=lambda url, upd: calls.append(upd)), \
+             patch("clayde.orchestrator.pr_work") as mock_pr_work:
+            mock_pr_work.run.side_effect = UsageLimitError("limit", cost_eur=0.0)
+            _handle_standalone_pr(MagicMock(), self.PR_URL)
+        # Should NOT clear in_progress
+        assert not any(c.get("in_progress") is False for c in calls)
 
 
 def test_run_loop_without_pebble_uses_legacy_path(monkeypatch):

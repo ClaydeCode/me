@@ -57,12 +57,22 @@ def get_default_branch(g: Github, owner: str, repo: str) -> str:
 
 
 def get_assigned_issues(g: Github) -> list:
-    """Return all open issues assigned to the authenticated user."""
+    """Return all open issues AND PRs assigned to the authenticated user.
+
+    GitHub models PRs as issues — each item that is a PR will have
+    ``html_url`` containing ``/pull/``.  Use ``is_pull_request_item()`` to
+    distinguish them.
+    """
     try:
         return list(g.get_user().get_issues(filter="assigned", state="open"))
     except GithubException as e:
         log.error("Failed to fetch assigned issues: %s", e)
         return []
+
+
+def is_pull_request_item(item) -> bool:
+    """Return True if an item from get_assigned_issues() is a pull request."""
+    return "/pull/" in item.html_url
 
 
 def find_open_pr(g: Github, owner: str, repo: str, branch_name: str) -> str | None:

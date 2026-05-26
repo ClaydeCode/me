@@ -57,6 +57,19 @@ def get_new_visible_comments(comments: list, last_seen_at: datetime | None) -> l
     ]
 
 
+def filter_pr_reviews(reviews: list, github_username: str) -> list:
+    """Return only PR reviews from whitelisted users, excluding the bot's own.
+
+    A review is visible if the reviewer is in the whitelist and is not the
+    authenticated bot account.
+    """
+    whitelist = get_settings().whitelisted_users_list
+    return [
+        r for r in reviews
+        if r.user.login in whitelist and r.user.login != github_username
+    ]
+
+
 def has_visible_content(issue, comments: list) -> bool:
     """Return True if there is any visible content (issue body or comments).
 
