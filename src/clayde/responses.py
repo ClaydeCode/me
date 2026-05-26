@@ -10,6 +10,12 @@ class WorkResponse(BaseModel):
     summary: str
 
 
+class WrapUpResponse(BaseModel):
+    title: str
+    body: str
+    success: bool
+
+
 def _extract_json(text: str) -> str:
     """Extract a JSON object from LLM output that may contain surrounding text.
 

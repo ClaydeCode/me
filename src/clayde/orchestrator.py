@@ -36,6 +36,7 @@ from clayde.github import (
     get_assigned_issues,
     get_pr_review_comments,
     get_pr_reviews,
+    get_pull,
     is_blocked,
     is_pull_request_item,
     issue_ref,
@@ -44,7 +45,7 @@ from clayde.github import (
 )
 from clayde.safety import filter_pr_reviews, get_new_visible_comments, has_visible_content
 from clayde.state import get_issue_state, load_state, save_state, update_issue_state
-from clayde.tasks import pr_work, work
+from clayde.tasks import work, wrap_up, pr_work
 from clayde.telemetry import get_tracer, init_tracer
 
 log = logging.getLogger("clayde.orchestrator")
@@ -110,9 +111,26 @@ def _handle_issue(g: Github, issue: Issue, url: str) -> None:
         # Check for new visible comments since last cycle
         new_comments = get_new_visible_comments(comments, last_seen_at)
 
+        # Check for merged PR — run wrap-up once, then stop processing this issue
+        pr_url = issue_state.get("pr_url")
+        if pr_url:
+            try:
+                _, _, pr_number = parse_pr_url(pr_url)
+                pr = get_pull(g, owner, repo, pr_number)
+                if pr.merged:
+                    if not issue_state.get("merged"):
+                        log.info("[%s] PR #%d merged — running wrap-up", label, pr_number)
+                        update_issue_state(url, {"merged": True})
+                        try:
+                            wrap_up.run(url)
+                        except Exception as e:
+                            log.error("[%s] Wrap-up failed: %s", label, e)
+                    return
+            except Exception as e:
+                log.warning("[%s] Failed to check PR merge status: %s", label, e)
+
         # Check for new PR review activity
         has_new_review_activity = False
-        pr_url = issue_state.get("pr_url")
         if pr_url and last_seen_at is not None:
             try:
                 _, _, pr_number = parse_pr_url(pr_url)

@@ -188,3 +188,8 @@ def get_issue_author(g: Github, owner: str, repo: str, number: int) -> str:
 def get_pr_title(g: Github, owner: str, repo: str, pr_number: int) -> str:
     """Return the title of a pull request."""
     return _get_repo(g, owner, repo).get_pull(pr_number).title
+
+
+def get_pull(g: Github, owner: str, repo: str, pr_number: int):
+    """Return the PullRequest object for the given PR number."""
+    return _get_repo(g, owner, repo).get_pull(pr_number)
