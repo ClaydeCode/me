@@ -394,3 +394,128 @@ def test_run_loop_with_pebble_invokes_async_entry(monkeypatch):
     monkeypatch.setattr(orchestrator, "get_settings", lambda: _S())
     orchestrator.run_loop()
     assert invoked.get("called") is True
+
+
+class TestMergeDetection:
+    """Tests for PR merge detection and wrap-up invocation."""
+
+    def _base_patches(self, pr_url="https://github.com/o/r/pull/5", merged=True, already_wrapped=False):
+        """Return a list of common patch targets for merge-detection tests."""
+        return [
+            patch("clayde.orchestrator.is_blocked", return_value=False),
+            patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)),
+            patch("clayde.orchestrator.fetch_issue_comments", return_value=[]),
+            patch("clayde.orchestrator.has_visible_content", return_value=True),
+            patch("clayde.orchestrator.get_issue_state", return_value={
+                "pr_url": pr_url,
+                "last_seen_at": "2024-01-01T12:00:00+00:00",
+                "merged": already_wrapped,
+            }),
+            patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 5)),
+            patch("clayde.orchestrator.get_pull", return_value=MagicMock(merged=merged)),
+            patch("clayde.orchestrator.update_issue_state"),
+            patch("clayde.orchestrator.get_new_visible_comments", return_value=[]),
+        ]
+
+    def test_merged_pr_runs_wrap_up_once(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Fix bug"
+        patches = self._base_patches(merged=True, already_wrapped=False)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], \
+             patch("clayde.orchestrator.wrap_up") as mock_wrap_up, \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+
+        mock_wrap_up.run.assert_called_once_with(issue.html_url)
+        mock_work.run.assert_not_called()
+
+    def test_merged_pr_sets_merged_flag(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Fix bug"
+        patches = self._base_patches(merged=True, already_wrapped=False)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7] as mock_update, patches[8], \
+             patch("clayde.orchestrator.wrap_up"), \
+             patch("clayde.orchestrator.work"):
+            _handle_issue(g, issue, issue.html_url)
+
+        assert any(c[0][1].get("merged") is True for c in mock_update.call_args_list)
+
+    def test_already_wrapped_up_skips_wrap_up(self):
+        """Second cycle after merge: merged flag set → skip wrap-up, just return."""
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Fix bug"
+        patches = self._base_patches(merged=True, already_wrapped=True)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], \
+             patch("clayde.orchestrator.wrap_up") as mock_wrap_up, \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+
+        mock_wrap_up.run.assert_not_called()
+        mock_work.run.assert_not_called()
+
+    def test_wrap_up_failure_does_not_propagate(self):
+        """Wrap-up errors are caught — _handle_issue must not raise."""
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Fix bug"
+        patches = self._base_patches(merged=True, already_wrapped=False)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], \
+             patch("clayde.orchestrator.wrap_up") as mock_wrap_up, \
+             patch("clayde.orchestrator.work"):
+            mock_wrap_up.run.side_effect = Exception("wrap-up exploded")
+            _handle_issue(g, issue, issue.html_url)  # must not raise
+
+    def test_unmerged_pr_falls_through_to_work(self):
+        """PR exists but not merged → normal work invocation."""
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Fix bug"
+        patches = self._base_patches(merged=False, already_wrapped=False)
+        with patches[0], patches[1], patches[2], patches[3], \
+             patch("clayde.orchestrator.get_issue_state", return_value={
+                 "pr_url": "https://github.com/o/r/pull/5",
+             }), \
+             patches[5], patches[6], patches[7], \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[MagicMock()]), \
+             patch("clayde.orchestrator.wrap_up") as mock_wrap_up, \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+
+        mock_wrap_up.run.assert_not_called()
+        mock_work.run.assert_called_once_with(issue.html_url)
+
+    def test_get_pull_failure_falls_through(self):
+        """get_pull error → logged and falls through to normal work."""
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/1"
+        issue.title = "Fix bug"
+        with patch("clayde.orchestrator.is_blocked", return_value=False), \
+             patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 1)), \
+             patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
+             patch("clayde.orchestrator.has_visible_content", return_value=True), \
+             patch("clayde.orchestrator.get_issue_state", return_value={
+                 "pr_url": "https://github.com/o/r/pull/5",
+             }), \
+             patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 5)), \
+             patch("clayde.orchestrator.get_pull", side_effect=Exception("API error")), \
+             patch("clayde.orchestrator.update_issue_state"), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[MagicMock()]), \
+             patch("clayde.orchestrator.wrap_up") as mock_wrap_up, \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+
+        mock_wrap_up.run.assert_not_called()
+        mock_work.run.assert_called_once_with(issue.html_url)
