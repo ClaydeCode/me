@@ -22,6 +22,7 @@ from clayde.github import (
     is_blocked,
     parse_issue_url,
     parse_pr_url,
+    get_pull,
     post_comment,
 )
 
@@ -256,3 +257,18 @@ class TestGetIssueAuthor:
         g = MagicMock()
         g.get_repo.return_value.get_issue.return_value.user.login = "alice"
         assert get_issue_author(g, "o", "r", 1) == "alice"
+
+
+class TestGetPull:
+    def test_returns_pull_request_object(self):
+        mock_pr = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_pull.return_value = mock_pr
+        g = MagicMock()
+        g.get_repo.return_value = mock_repo
+
+        result = get_pull(g, "owner", "repo", 42)
+
+        g.get_repo.assert_called_once_with("owner/repo")
+        mock_repo.get_pull.assert_called_once_with(42)
+        assert result is mock_pr
