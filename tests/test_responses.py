@@ -4,6 +4,7 @@ import pytest
 
 from clayde.responses import (
     WorkResponse,
+    WrapUpResponse,
     _extract_json,
     parse_response,
 )
@@ -88,3 +89,22 @@ class TestParseResponse:
         text = json.dumps({"summary": content})
         result = parse_response(text, WorkResponse)
         assert result.summary == content
+
+
+class TestWrapUpResponse:
+    def test_parses_valid_payload(self):
+        raw = '{"title": "Wrap-up done", "body": "Fixed auth bug", "success": true}'
+        result = parse_response(raw, WrapUpResponse)
+        assert result.title == "Wrap-up done"
+        assert result.body == "Fixed auth bug"
+        assert result.success is True
+
+    def test_parses_failure_payload(self):
+        raw = '{"title": "Wrap-up error", "body": "timeout", "success": false}'
+        result = parse_response(raw, WrapUpResponse)
+        assert result.success is False
+
+    def test_parses_from_fenced_block(self):
+        raw = 'Some narrative\n```json\n{"title": "t", "body": "b", "success": true}\n```'
+        result = parse_response(raw, WrapUpResponse)
+        assert result.title == "t"
