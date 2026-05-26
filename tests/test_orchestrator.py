@@ -19,6 +19,8 @@ def _mock_settings(enabled=False, github_token="tok", github_username="ClaydeCod
     s.enabled = enabled
     s.github_token = github_token
     s.github_username = github_username
+    s.effective_git_name = "Test Bot"
+    s.git_email = "test@example.com"
     return s
 
 
@@ -34,6 +36,7 @@ class TestMain:
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator._configure_global_git_identity"), \
              patch("clayde.orchestrator.is_claude_available", return_value=False), \
              patch("clayde.orchestrator.get_github_client") as mock_gc:
             main()
@@ -43,6 +46,7 @@ class TestMain:
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator._configure_global_git_identity"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[]), \
@@ -55,6 +59,7 @@ class TestMain:
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator._configure_global_git_identity"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \
@@ -70,6 +75,7 @@ class TestMain:
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
+             patch("clayde.orchestrator._configure_global_git_identity"), \
              patch("clayde.orchestrator.is_claude_available", return_value=True), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[issue]), \

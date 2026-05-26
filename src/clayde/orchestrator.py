@@ -198,6 +198,16 @@ def _prune_closed_issues(g: Github, issues_state: dict) -> None:
         save_state(state)
 
 
+def _configure_global_git_identity(settings) -> None:
+    git_name = settings.effective_git_name
+    git_email = settings.git_email
+    if not isinstance(git_name, str) or not isinstance(git_email, str) or not git_name or not git_email:
+        log.error("CLAYDE_GIT_NAME (or CLAYDE_GITHUB_USERNAME) and CLAYDE_GIT_EMAIL must be set to non-empty strings")
+        sys.exit(1)
+    subprocess.run(["git", "config", "--global", "user.name", git_name], check=True)
+    subprocess.run(["git", "config", "--global", "user.email", git_email], check=True)
+
+
 def main():
     settings = get_settings()
 
@@ -208,13 +218,7 @@ def main():
 
     os.environ["GH_TOKEN"] = settings.github_token
 
-    git_name = settings.effective_git_name
-    git_email = settings.git_email
-    if not git_name or not git_email:
-        log.error("CLAYDE_GIT_NAME (or CLAYDE_GITHUB_USERNAME) and CLAYDE_GIT_EMAIL must be set")
-        sys.exit(1)
-    subprocess.run(["git", "config", "--global", "user.name", git_name], check=True)
-    subprocess.run(["git", "config", "--global", "user.email", git_email], check=True)
+    _configure_global_git_identity(settings)
 
     provider = init_tracer()
     tracer = get_tracer()
