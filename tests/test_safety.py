@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from clayde.safety import (
     _has_whitelisted_reaction,
     filter_comments,
+    filter_pr_reviews,
     get_new_visible_comments,
     has_visible_content,
     is_comment_visible,
@@ -187,6 +188,42 @@ class TestGetNewVisibleComments:
                    return_value=_mock_settings(["ClaydeCode"], github_username="ClaydeCode")):
             result = get_new_visible_comments([clayde_c], last_seen)
         assert clayde_c not in result
+
+
+class TestFilterPrReviews:
+    def _make_review(self, login):
+        r = MagicMock()
+        r.user.login = login
+        return r
+
+    def test_includes_whitelisted_reviewer(self):
+        review = self._make_review("alice")
+        with patch("clayde.safety.get_settings", return_value=_mock_settings(["alice"])):
+            result = filter_pr_reviews([review], "ClaydeCode")
+        assert result == [review]
+
+    def test_excludes_non_whitelisted_reviewer(self):
+        review = self._make_review("mallory")
+        with patch("clayde.safety.get_settings", return_value=_mock_settings(["alice"])):
+            result = filter_pr_reviews([review], "ClaydeCode")
+        assert result == []
+
+    def test_excludes_bot_own_review(self):
+        review = self._make_review("ClaydeCode")
+        with patch("clayde.safety.get_settings", return_value=_mock_settings(["alice", "ClaydeCode"])):
+            result = filter_pr_reviews([review], "ClaydeCode")
+        assert result == []
+
+    def test_keeps_whitelisted_non_bot(self):
+        alice = self._make_review("alice")
+        bot = self._make_review("ClaydeCode")
+        with patch("clayde.safety.get_settings", return_value=_mock_settings(["alice", "ClaydeCode"])):
+            result = filter_pr_reviews([alice, bot], "ClaydeCode")
+        assert result == [alice]
+
+    def test_empty_input(self):
+        with patch("clayde.safety.get_settings", return_value=_mock_settings(["alice"])):
+            assert filter_pr_reviews([], "ClaydeCode") == []
 
 
 class TestHasWhitelistedReaction:
