@@ -35,6 +35,15 @@ Clayde's loop is event-driven and stateless by design:
 7. **Pure PR approvals** (no comments) update `last_seen_at` without invoking Claude.
 8. **Closed issues** are pruned from state automatically.
 
+Before any issues are processed, each tick runs a Claude availability
+pre-check. A **usage/rate limit** simply skips the cycle (it is transient and
+retried next tick). An **authentication failure** — credentials expired or
+replaced — instead sends a one-shot high-priority ntfy alert (title *"Clayde:
+Claude CLI auth failed"*) so the operator can re-authenticate and restart the
+container. The alert fires once per failure streak (tracked by
+`claude_auth_failure_notified` in `state.json`) and re-arms once Claude is
+reachable again.
+
 ---
 
 ## Safety & Content Filtering
@@ -60,6 +69,7 @@ Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `data/config.
 - **PR creation by Claude**: Claude writes the PR description and a recommended reading order for larger diffs
 - **PR review handling**: Reads and addresses reviewer feedback automatically
 - **Rate-limit resilience**: Detects Claude usage limits and automatically retries
+- **Auth-failure alerting**: Distinguishes Claude authentication failures from usage limits and sends a one-shot high-priority ntfy alert so the operator can re-authenticate
 - **Crash recovery**: `in_progress` flag ensures interrupted runs are retried next cycle
 - **Safety filtering**: Whitelist-based content filtering prevents acting on unauthorized content
 - **Observability**: OpenTelemetry tracing with JSONL file export
@@ -179,7 +189,7 @@ In any repository the bot has access to, assign issues to the bot account. Clayd
 | `CLAYDE_PEBBLE_PORT` | Internal HTTP port (default `8080`) |
 | `CLAYDE_PEBBLE_TIMEOUT` | Per-request CLI timeout seconds (default `300`) |
 | `CLAYDE_PEBBLE_QUEUE_MAX` | Max queued jobs before 503 (default `100`) |
-| `CLAYDE_NTFY_TOPIC` | ntfy.sh topic for Pebble outcome notifications |
+| `CLAYDE_NTFY_TOPIC` | ntfy.sh topic for Pebble outcome notifications and Claude auth-failure alerts |
 | `CLAYDE_NTFY_BASE_URL` | ntfy base URL (override for self-host) |
 | `CLAYDE_NTFY_TIMEOUT_S` | ntfy POST timeout seconds (default `10`) |
 | `CLAYDE_KB_PATH` | In-container KB path; Pebble per-request cwd (default `/home/clayde/knowledge_base`) |

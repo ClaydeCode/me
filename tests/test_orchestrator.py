@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from clayde.claude import ClaudeStatus
 from clayde.orchestrator import (
     _handle_issue,
     _handle_standalone_pr,
@@ -28,7 +29,7 @@ def _mock_settings(enabled=False, github_token="tok", github_username="ClaydeCod
 
 
 @contextmanager
-def _patched_main(enabled=True, claude_available=True, assigned=(), state=None):
+def _patched_main(enabled=True, claude_status=ClaudeStatus.AVAILABLE, assigned=(), state=None):
     """Patch every external dependency `main()` touches.
 
     Yields a dict of name → mock so individual tests can assert on call behavior.
@@ -38,7 +39,10 @@ def _patched_main(enabled=True, claude_available=True, assigned=(), state=None):
         "setup_logging": {},
         "init_tracer": {},
         "_configure_global_git_identity": {},
-        "is_claude_available": {"return_value": claude_available},
+        "check_claude_availability": {"return_value": claude_status},
+        "get_claude_auth_notified": {"return_value": False},
+        "set_claude_auth_notified": {},
+        "send_ntfy_sync": {},
         "get_github_client": {},
         "get_assigned_issues": {"return_value": list(assigned)},
         "load_state": {"return_value": state if state is not None else {"issues": {}}},
@@ -59,10 +63,11 @@ class TestMain:
                 main()
             assert exc_info.value.code == 0
 
-    def test_returns_when_claude_unavailable(self):
-        with _patched_main(claude_available=False) as mocks:
+    def test_returns_when_claude_usage_limited(self):
+        with _patched_main(claude_status=ClaudeStatus.USAGE_LIMIT) as mocks:
             main()
             mocks["get_github_client"].assert_not_called()
+            mocks["send_ntfy_sync"].assert_not_called()
 
     def test_returns_when_no_assigned_issues(self):
         with _patched_main(assigned=[]):
@@ -81,6 +86,43 @@ class TestMain:
         with _patched_main(assigned=[issue]) as mocks:
             main()
             mocks["_prune_closed_issues"].assert_called_once()
+
+
+class TestClaudeAuthFailureNotification:
+    def test_notifies_on_auth_failure(self):
+        with _patched_main(claude_status=ClaudeStatus.AUTH_FAILED) as mocks:
+            main()
+            mocks["send_ntfy_sync"].assert_called_once()
+            kwargs = mocks["send_ntfy_sync"].call_args.kwargs
+            assert kwargs["title"] == "Clayde: Claude CLI auth failed"
+            assert kwargs["success"] is False
+            mocks["set_claude_auth_notified"].assert_called_once_with(True)
+            # No work is attempted on auth failure
+            mocks["get_github_client"].assert_not_called()
+
+    def test_does_not_renotify_when_already_alerted(self):
+        with _patched_main(claude_status=ClaudeStatus.AUTH_FAILED) as mocks:
+            mocks["get_claude_auth_notified"].return_value = True
+            main()
+            mocks["send_ntfy_sync"].assert_not_called()
+            mocks["set_claude_auth_notified"].assert_not_called()
+            mocks["get_github_client"].assert_not_called()
+
+    def test_no_notification_on_usage_limit(self):
+        with _patched_main(claude_status=ClaudeStatus.USAGE_LIMIT) as mocks:
+            main()
+            mocks["send_ntfy_sync"].assert_not_called()
+
+    def test_clears_latch_when_available_again(self):
+        with _patched_main(claude_status=ClaudeStatus.AVAILABLE, assigned=[]) as mocks:
+            mocks["get_claude_auth_notified"].return_value = True
+            main()
+            mocks["set_claude_auth_notified"].assert_called_once_with(False)
+
+    def test_does_not_clear_latch_when_never_set(self):
+        with _patched_main(claude_status=ClaudeStatus.AVAILABLE, assigned=[]) as mocks:
+            main()
+            mocks["set_claude_auth_notified"].assert_not_called()
 
 
 class TestHandleIssue:
@@ -394,7 +436,8 @@ class TestMainDispatch:
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.check_claude_availability", return_value=ClaudeStatus.AVAILABLE), \
+             patch("clayde.orchestrator.get_claude_auth_notified", return_value=False), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[item]), \
              patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
@@ -412,7 +455,8 @@ class TestMainDispatch:
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.check_claude_availability", return_value=ClaudeStatus.AVAILABLE), \
+             patch("clayde.orchestrator.get_claude_auth_notified", return_value=False), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[item]), \
              patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \
@@ -431,7 +475,8 @@ class TestMainDispatch:
         with patch("clayde.orchestrator.get_settings", return_value=_mock_settings(enabled=True)), \
              patch("clayde.orchestrator.setup_logging"), \
              patch("clayde.orchestrator.init_tracer"), \
-             patch("clayde.orchestrator.is_claude_available", return_value=True), \
+             patch("clayde.orchestrator.check_claude_availability", return_value=ClaudeStatus.AVAILABLE), \
+             patch("clayde.orchestrator.get_claude_auth_notified", return_value=False), \
              patch("clayde.orchestrator.get_github_client"), \
              patch("clayde.orchestrator.get_assigned_issues", return_value=[item]), \
              patch("clayde.orchestrator.load_state", return_value={"issues": {}}), \

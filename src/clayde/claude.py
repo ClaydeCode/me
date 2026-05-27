@@ -1,6 +1,7 @@
 """Claude invocation via the Anthropic API or the Claude Code CLI."""
 
 import dataclasses
+import enum
 import json
 import logging
 import os
@@ -50,6 +51,20 @@ _AUTH_ERROR_PATTERNS = [
     "authentication_error",
     "invalid authentication credentials",
 ]
+
+
+class ClaudeStatus(enum.Enum):
+    """Outcome of a Claude availability pre-check.
+
+    Distinguishes a recoverable usage/rate limit (transient — just skip the
+    cycle) from an authentication failure (requires operator intervention —
+    re-authenticate and restart). ``AVAILABLE`` covers both success and any
+    unrecognised error (fail-open).
+    """
+
+    AVAILABLE = "available"
+    USAGE_LIMIT = "usage_limit"
+    AUTH_FAILED = "auth_failed"
 
 
 @dataclasses.dataclass
@@ -130,7 +145,7 @@ class ClaudeBackend(ABC):
     ) -> InvocationResult: ...
 
     @abstractmethod
-    def is_available(self) -> bool: ...
+    def check_availability(self) -> ClaudeStatus: ...
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +443,7 @@ class ApiBackend(ClaudeBackend):
                 input_tokens=total_input, output_tokens=total_output,
             )
 
-    def is_available(self) -> bool:
+    def check_availability(self) -> ClaudeStatus:
         tracer = get_tracer()
         with tracer.start_as_current_span("clayde.claude_available_check") as span:
             try:
@@ -439,21 +454,22 @@ class ApiBackend(ClaudeBackend):
                     messages=[{"role": "user", "content": "respond with: OK"}],
                 )
                 span.set_attribute("claude.available", True)
-                return True
+                return ClaudeStatus.AVAILABLE
             except anthropic.RateLimitError as e:
                 log.warning("Claude availability check: rate limit hit — %s", e)
                 span.set_attribute("claude.available", False)
-                return False
+                return ClaudeStatus.USAGE_LIMIT
             except anthropic.AuthenticationError as exc:
                 log.error("Claude availability check: authentication failed — %s", exc)
                 span.set_attribute("claude.available", False)
+                span.set_attribute("claude.auth_failed", True)
                 span.set_attribute("claude.check_error", str(exc))
-                return False
+                return ClaudeStatus.AUTH_FAILED
             except Exception as exc:
                 log.warning("Claude availability pre-check raised %s — assuming available", exc)
                 span.set_attribute("claude.available", True)
                 span.set_attribute("claude.check_error", str(exc))
-                return True
+                return ClaudeStatus.AVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +675,7 @@ class CliBackend(ClaudeBackend):
                 input_tokens=0, output_tokens=0,
             )
 
-    def is_available(self) -> bool:
+    def check_availability(self) -> ClaudeStatus:
         tracer = get_tracer()
         with tracer.start_as_current_span("clayde.claude_available_check") as span:
             cli_bin = _resolve_cli_bin()
@@ -683,18 +699,19 @@ class CliBackend(ClaudeBackend):
                         error_text += " " + (result.stdout or "")
                 if _is_limit_error(error_text):
                     span.set_attribute("claude.available", False)
-                    return False
+                    return ClaudeStatus.USAGE_LIMIT
                 if is_error and _is_auth_error(error_text):
                     log.warning("Claude CLI authentication failed — marking unavailable")
                     span.set_attribute("claude.available", False)
-                    return False
+                    span.set_attribute("claude.auth_failed", True)
+                    return ClaudeStatus.AUTH_FAILED
                 span.set_attribute("claude.available", True)
-                return True
+                return ClaudeStatus.AVAILABLE
             except Exception as exc:
                 log.warning("Claude CLI availability pre-check raised %s — assuming available", exc)
                 span.set_attribute("claude.available", True)
                 span.set_attribute("claude.check_error", str(exc))
-                return True
+                return ClaudeStatus.AVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -750,11 +767,23 @@ def invoke_claude(
     )
 
 
-def is_claude_available() -> bool:
-    """Return True if Claude is available (rate limit not currently hit).
+def check_claude_availability() -> ClaudeStatus:
+    """Return the current Claude availability status.
 
-    Makes a minimal invocation. Returns False when a limit is detected;
-    returns True on success or any other error (fail-open to avoid
-    suppressing real work on spurious pre-check errors).
+    Makes a minimal invocation and distinguishes the failure modes so callers
+    can react differently: a usage/rate limit is transient (skip the cycle and
+    retry), whereas an authentication failure needs operator intervention
+    (re-authenticate and restart). Returns ``ClaudeStatus.AVAILABLE`` on
+    success or any unrecognised error (fail-open to avoid suppressing real
+    work on spurious pre-check errors).
     """
-    return _get_backend().is_available()
+    return _get_backend().check_availability()
+
+
+def is_claude_available() -> bool:
+    """Return True if Claude is available (no usage limit or auth failure).
+
+    Thin boolean wrapper over :func:`check_claude_availability` for callers
+    that don't need to distinguish the failure modes.
+    """
+    return check_claude_availability() is ClaudeStatus.AVAILABLE

@@ -72,3 +72,34 @@ class TestUpdateIssueState:
             "owner": "o",
             "pr_url": "pr",
         }
+
+
+class TestClaudeAuthNotified:
+    def test_defaults_to_false_when_unset(self, tmp_path):
+        sf = tmp_path / "state.json"
+        sf.write_text(json.dumps({"issues": {}}))
+        with patch.object(state_mod, "_STATE_FILE", sf):
+            assert state_mod.get_claude_auth_notified() is False
+
+    def test_defaults_to_false_when_file_missing(self, tmp_path):
+        sf = tmp_path / "nonexistent.json"
+        with patch.object(state_mod, "_STATE_FILE", sf):
+            assert state_mod.get_claude_auth_notified() is False
+
+    def test_set_then_get_roundtrip(self, tmp_path):
+        sf = tmp_path / "state.json"
+        sf.write_text(json.dumps({"issues": {}}))
+        with patch.object(state_mod, "_STATE_FILE", sf):
+            state_mod.set_claude_auth_notified(True)
+            assert state_mod.get_claude_auth_notified() is True
+            state_mod.set_claude_auth_notified(False)
+            assert state_mod.get_claude_auth_notified() is False
+
+    def test_set_preserves_issues(self, tmp_path):
+        sf = tmp_path / "state.json"
+        sf.write_text(json.dumps({"issues": {"url1": {"owner": "o"}}}))
+        with patch.object(state_mod, "_STATE_FILE", sf):
+            state_mod.set_claude_auth_notified(True)
+        result = json.loads(sf.read_text())
+        assert result["issues"] == {"url1": {"owner": "o"}}
+        assert result["claude_auth_failure_notified"] is True

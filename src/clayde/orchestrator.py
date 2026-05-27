@@ -27,9 +27,15 @@ from opentelemetry.trace import StatusCode
 from github import Github
 from github.Issue import Issue
 
-from clayde.claude import InvocationTimeoutError, UsageLimitError, is_claude_available
+from clayde.claude import (
+    ClaudeStatus,
+    InvocationTimeoutError,
+    UsageLimitError,
+    check_claude_availability,
+)
 from clayde.config import get_github_client, get_settings, setup_logging
 from clayde.webhook import JobQueue, create_app, worker_loop
+from clayde.webhook.notify import send_ntfy_sync
 from clayde.github import (
     fetch_issue,
     fetch_issue_comments,
@@ -44,7 +50,14 @@ from clayde.github import (
     parse_pr_url,
 )
 from clayde.safety import filter_pr_reviews, get_new_visible_comments, has_visible_content
-from clayde.state import get_issue_state, load_state, save_state, update_issue_state
+from clayde.state import (
+    get_claude_auth_notified,
+    get_issue_state,
+    load_state,
+    save_state,
+    set_claude_auth_notified,
+    update_issue_state,
+)
 from clayde.tasks import work, wrap_up, pr_work
 from clayde.telemetry import get_tracer, init_tracer
 
@@ -306,6 +319,32 @@ def _prune_closed_issues(g: Github, issues_state: dict) -> None:
         save_state(state)
 
 
+def _notify_claude_auth_failure(settings) -> None:
+    """Send a one-shot high-priority ntfy alert when Claude auth fails.
+
+    Fires once per auth-failure streak: the notified flag is set here and
+    cleared in ``main()`` once Claude becomes available again. A persistent
+    failure therefore alerts only on the first cycle, while a
+    recovered-then-failed sequence alerts again.
+    """
+    if get_claude_auth_notified():
+        log.warning("Claude authentication still failing — already alerted, skipping ntfy")
+        return
+    log.error("Claude authentication failed — sending operator alert")
+    send_ntfy_sync(
+        title="Clayde: Claude CLI auth failed",
+        body=(
+            "Claude authentication failed — Clayde is skipping all work. "
+            "Re-authenticate (claude auth login) and restart the container."
+        ),
+        success=False,
+        base_url=settings.ntfy_base_url,
+        topic=settings.ntfy_topic,
+        timeout_s=settings.ntfy_timeout_s,
+    )
+    set_claude_auth_notified(True)
+
+
 def _configure_global_git_identity(settings) -> None:
     git_name = settings.effective_git_name
     git_email = settings.git_email
@@ -332,11 +371,24 @@ def main():
     tracer = get_tracer()
 
     with tracer.start_as_current_span("clayde.tick") as tick_span:
-        if not is_claude_available():
+        status = check_claude_availability()
+        if status is ClaudeStatus.AUTH_FAILED:
+            tick_span.set_attribute("claude.available", False)
+            tick_span.set_attribute("claude.auth_failed", True)
+            _notify_claude_auth_failure(settings)
+            provider.force_flush()
+            return
+        if status is ClaudeStatus.USAGE_LIMIT:
             log.warning("Claude usage limit hit — skipping all work this cycle")
             tick_span.set_attribute("claude.available", False)
             provider.force_flush()
             return
+
+        # Claude is available — clear any prior auth-failure alert latch so a
+        # future failure alerts again.
+        if get_claude_auth_notified():
+            log.info("Claude authentication recovered — clearing auth-failure alert latch")
+            set_claude_auth_notified(False)
 
         tick_span.set_attribute("claude.available", True)
         g = get_github_client()
