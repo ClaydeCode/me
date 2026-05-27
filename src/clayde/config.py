@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     # Orchestrator behaviour
     loop_interval_s: int = 300
     implement_max_retries: int = 3
+    # Max autonomous CI-fix attempts per PR before giving up and notifying.
+    ci_fix_max_attempts: int = 3
 
     # Pebble webhook
     pebble_enabled: bool = False

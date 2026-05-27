@@ -49,7 +49,8 @@ src/clayde/
                         #   find_open_pr(), create_pull_request(), is_blocked(),
                         #   add_pr_reviewer(), get_pr_reviews(),
                         #   get_pr_review_comments(), parse_pr_url(),
-                        #   get_issue_author()
+                        #   get_issue_author(), get_check_runs(),
+                        #   get_required_check_names()
   git.py                # ensure_repo() — clone or update repos under REPOS_DIR
   safety.py             # Content filtering & plan approval: is_comment_visible(),
                         #   filter_comments(), is_issue_visible(),
@@ -63,10 +64,13 @@ src/clayde/
   orchestrator.py       # main() — single cycle, run_loop() — container entry point
   prompts/
     work.j2             # Jinja2 template for the unified work prompt
+    fix_ci.j2           # prompt for diagnosing/fixing a failing PR pipeline
   tasks/
     __init__.py
     work.py             # run(issue_url) — unified: Claude decides next action
                         #   (ask, plan, implement, open PR, or address review)
+    fix_ci.py           # run(issue_url, pr_url, branch_name, failed_checks) —
+                        #   self-fix a failing CI pipeline on a clayde PR
   webhook/
     __init__.py
     app.py              # FastAPI app, /webhook/pebble, /health, OTel enqueue span
@@ -108,6 +112,7 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key for Claude SDK calls (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
 | `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` — selects Anthropic SDK or Claude Code CLI |
+| `CLAYDE_CI_FIX_MAX_ATTEMPTS` | Max autonomous CI-fix attempts per PR before giving up and notifying (default 3) |
 | `CLAYDE_PEBBLE_ENABLED` | Set to `true` to enable the Pebble webhook |
 | `CLAYDE_PEBBLE_TOKEN` | Bearer token the Pebble app sends |
 | `CLAYDE_PEBBLE_HOST` | Public hostname for Traefik routing |
@@ -142,12 +147,25 @@ Per-issue state is stored in `state.json` under
 | `pr_url` | PR opened for this issue, once detected via `find_open_pr()` |
 | `in_progress` | `True` while the work task runs; a crash leaves it set so the next cycle retries |
 | `last_seen_at` | ISO-UTC timestamp of the last completed cycle; used to detect new activity |
+| `ci_fix_attempts` | Number of autonomous CI-fix attempts made for this PR (capped at `ci_fix_max_attempts`) |
+| `last_ci_fix_attempt_sha` | PR head SHA of the last CI-fix attempt; prevents re-attempting the same commit |
+| `ci_fix_exhausted_notified` | `True` once the operator has been alerted that the attempt budget is spent (avoids re-notifying) |
 
 **Activity detection** (`_handle_issue`): the work task is invoked when any of
 — `in_progress` is set (retry), `last_seen_at` is `None` (never processed),
 there are new whitelist-visible comments, or there is new PR review activity
 (inline comments or a review body). A pure PR approval with no comments does
 **not** invoke Claude — it just advances `last_seen_at`.
+
+**CI self-fix**: when there is *no* new human activity but an open PR exists,
+`_handle_ci_fix()` checks the PR head commit's check runs (`get_check_runs()`,
+filtered to branch-protection-required checks when defined). If a required
+check has failed and a fix has not yet been attempted for that head SHA, the
+`fix_ci` task is invoked: Claude inspects the failing job logs, pushes a fix to
+the PR branch, and a summary is posted as an issue comment. Attempts are capped
+per PR by `ci_fix_max_attempts` (default 3); once exhausted, the operator is
+notified once via ntfy and Clayde stops attempting. Green/pending CI falls
+through to normal review monitoring unchanged.
 
 **Limits & retries**: `UsageLimitError` / `InvocationTimeoutError` from Claude
 leave `in_progress=True` so the next cycle retries automatically. Other
@@ -221,6 +239,8 @@ Key functions:
 - `get_pr_reviews()` / `get_pr_review_comments()` — fetch PR review data
 - `edit_comment()` — edit an existing issue comment
 - `parse_pr_url()` — parse PR URL into (owner, repo, pr_number)
+- `get_check_runs(g, owner, repo, ref)` — failed check runs for a commit SHA (name, conclusion, details_url)
+- `get_required_check_names(g, owner, repo, branch)` — required status-check names from branch protection (empty set when unprotected)
 
 ---
 
