@@ -34,8 +34,15 @@ services:
       - CLAYDE_ENABLED=true
     volumes:
       - ./data:/data
-      # Mount Claude CLI OAuth credentials (required when CLAYDE_CLAUDE_BACKEND=cli)
-      - ~/.claude/.credentials.json:/home/clayde/.claude/.credentials.json
+      # Dedicated Claude config dir for the container (required when
+      # CLAYDE_CLAUDE_BACKEND=cli). Use a SEPARATE login here — see README:
+      #   CLAUDE_CONFIG_DIR=~/clayde-claude claude login
+      # Mount the DIRECTORY, not the single .credentials.json file: the CLI
+      # refreshes its short-lived OAuth token via atomic rename (new inode),
+      # which a single-file bind mount pins to the stale inode at start —
+      # causing "authentication expired" until the stack is restarted. A
+      # directory mount resolves the path live, so refreshes are picked up.
+      - ~/clayde-claude:/home/clayde/.claude
       # Pebble skill directories — mount one or more host dirs read-only
       # under /skills/. Subdirectory layout is free; discovery is recursive.
       - ~/skills/personal:/skills/personal:ro
