@@ -131,9 +131,10 @@ Uses the Anthropic Python SDK with a tool-use loop. Pay-per-token.
 
 Runs the Claude Code CLI as a subprocess. Uses your Claude Pro/Max subscription — no per-token cost.
 
-1. On the host machine, log in to the CLI:
+1. On the host machine, create a **dedicated** login for the container in its
+   own config directory (kept separate from your personal `~/.claude`):
    ```bash
-   claude login
+   CLAUDE_CONFIG_DIR=~/clayde-claude claude login
    ```
 2. Set in `data/config.env`:
    ```
@@ -141,7 +142,21 @@ Runs the Claude Code CLI as a subprocess. Uses your Claude Pro/Max subscription 
    ```
    (`CLAYDE_CLAUDE_API_KEY` is not required for the CLI backend.)
 
-The `docker-compose.yml` mounts `~/.claude/.credentials.json` from the host directly into the container. Token refreshes, logouts, and account switches on the host are immediately reflected.
+The `docker-compose.yml` mounts the `~/clayde-claude` **directory** into the
+container as its Claude config dir. Two things matter here:
+
+- **Mount the directory, not the `.credentials.json` file.** The CLI refreshes
+  its short-lived OAuth token by writing a new file and atomically renaming it
+  into place — which changes the file's inode. A single-file bind mount is
+  pinned to the original inode at container start, so it never sees the new
+  token and the container fails with "authentication expired" until you restart
+  the stack. A directory mount resolves the path live, so refreshes propagate
+  with no restart.
+- **Use a dedicated login, not your personal `~/.claude`.** That directory
+  holds your interactive sessions, projects, and history; sharing it exposes
+  that state to the container. A separate login also gives the container its own
+  OAuth refresh-token lineage, so its token refreshes can't invalidate your
+  host login (refresh tokens are single-use).
 
 ### 5. Start the container
 
