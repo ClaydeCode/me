@@ -56,7 +56,7 @@ async def process_job(job: PebbleJob, *, timeout_s: int, kb_path: str) -> None:
 
         skills = discover_skills(SKILLS_ROOT)
         span.set_attribute("pebble.skills_available", len(skills))
-        system_prompt = build_system_prompt(skills)
+        system_prompt = build_system_prompt(skills, timeout_s=timeout_s)
         user_text = build_user_prompt(job.text, job.timestamp)
 
         t0 = time.monotonic()
