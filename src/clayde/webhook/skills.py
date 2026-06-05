@@ -53,6 +53,12 @@ via Syncthing). If the command implies "remember this", "note", "save",
 "log", or "capture", write a file there. No git operations — Syncthing
 handles sync.
 
+You have a hard wall-clock budget of {timeout_s} seconds for this
+entire request. If your process exceeds it, it is killed and the user gets
+no result. Scope your work to fit: prefer a smaller, complete action over an
+ambitious one that risks timing out. If the request is too big to finish in
+time, do the most valuable part you can and say so in the JSON summary.
+
 {skill_section}
 
 Skills are suggestions, not constraints. Use as many as the command needs,
@@ -72,8 +78,12 @@ by the framework.
 """
 
 
-def build_system_prompt(skills: list[Skill]) -> str:
-    """Build the system prompt sent to the Claude CLI for a Pebble request."""
+def build_system_prompt(skills: list[Skill], timeout_s: int = 300) -> str:
+    """Build the system prompt sent to the Claude CLI for a Pebble request.
+
+    ``timeout_s`` is the hard wall-clock budget enforced by the runner; it is
+    surfaced in the prompt so Claude can scope work to fit.
+    """
     if not skills:
         skill_section = "Available skills: (none currently registered)"
     else:
@@ -85,7 +95,9 @@ def build_system_prompt(skills: list[Skill]) -> str:
             "Skill file paths:\n\n"
             f"{files}"
         )
-    return _SYSTEM_PROMPT_TEMPLATE.format(skill_section=skill_section)
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        skill_section=skill_section, timeout_s=timeout_s,
+    )
 
 
 def build_user_prompt(text: str, timestamp: int) -> str:

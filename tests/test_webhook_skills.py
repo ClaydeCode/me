@@ -120,6 +120,14 @@ def test_build_system_prompt_empty_catalog():
     assert "(none currently registered)" in prompt
 
 
+def test_prompt_mentions_timeout_budget():
+    p = build_system_prompt([], timeout_s=300)
+    assert "300 seconds" in p
+    assert "budget" in p.lower()
+    # the runner kills on overrun — the agent must be told to scope work
+    assert "killed" in p.lower()
+
+
 def test_build_user_prompt():
     out = build_user_prompt("hello world", 1778068506)
     assert "1778068506" in out
