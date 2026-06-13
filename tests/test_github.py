@@ -15,10 +15,12 @@ from clayde.github import (
     fetch_issue_comments,
     find_open_pr,
     get_assigned_issues,
+    get_check_runs,
     get_default_branch,
     get_issue_author,
     get_pr_review_comments,
     get_pr_reviews,
+    get_required_check_names,
     is_blocked,
     is_pull_request_item,
     parse_issue_url,
@@ -26,6 +28,16 @@ from clayde.github import (
     get_pull,
     post_comment,
 )
+
+
+def _make_check_run(name, status, conclusion, details_url="https://ci/details", html_url="https://ci/html"):
+    run = MagicMock()
+    run.name = name
+    run.status = status
+    run.conclusion = conclusion
+    run.details_url = details_url
+    run.html_url = html_url
+    return run
 
 
 class TestParseIssueUrl:
@@ -290,3 +302,77 @@ class TestGetPull:
         g.get_repo.assert_called_once_with("owner/repo")
         mock_repo.get_pull.assert_called_once_with(42)
         assert result is mock_pr
+
+
+class TestGetCheckRuns:
+    def _setup(self, g, runs):
+        commit = MagicMock()
+        commit.get_check_runs.return_value = runs
+        g.get_repo.return_value.get_commit.return_value = commit
+        return commit
+
+    def test_returns_only_completed_failures(self):
+        g = MagicMock()
+        runs = [
+            _make_check_run("test", "completed", "failure"),
+            _make_check_run("lint", "completed", "success"),
+            _make_check_run("build", "completed", "timed_out"),
+            _make_check_run("deploy", "in_progress", None),
+            _make_check_run("docs", "completed", "skipped"),
+            _make_check_run("flaky", "completed", "neutral"),
+        ]
+        self._setup(g, runs)
+        result = get_check_runs(g, "o", "r", "abc123")
+        names = {r["name"] for r in result}
+        assert names == {"test", "build"}
+
+    def test_includes_conclusion_and_details_url(self):
+        g = MagicMock()
+        self._setup(g, [_make_check_run("test", "completed", "failure",
+                                        details_url="https://ci/log")])
+        result = get_check_runs(g, "o", "r", "abc123")
+        assert result == [{
+            "name": "test",
+            "conclusion": "failure",
+            "details_url": "https://ci/log",
+        }]
+
+    def test_falls_back_to_html_url(self):
+        g = MagicMock()
+        self._setup(g, [_make_check_run("test", "completed", "failure",
+                                        details_url=None, html_url="https://ci/html")])
+        result = get_check_runs(g, "o", "r", "abc123")
+        assert result[0]["details_url"] == "https://ci/html"
+
+    def test_returns_empty_when_all_green(self):
+        g = MagicMock()
+        self._setup(g, [_make_check_run("test", "completed", "success")])
+        assert get_check_runs(g, "o", "r", "abc123") == []
+
+    def test_uses_commit_ref(self):
+        g = MagicMock()
+        self._setup(g, [])
+        get_check_runs(g, "o", "r", "deadbeef")
+        g.get_repo.return_value.get_commit.assert_called_once_with("deadbeef")
+
+
+class TestGetRequiredCheckNames:
+    def test_returns_contexts(self):
+        g = MagicMock()
+        rsc = MagicMock()
+        rsc.contexts = ["test", "lint"]
+        g.get_repo.return_value.get_branch.return_value.get_required_status_checks.return_value = rsc
+        assert get_required_check_names(g, "o", "r", "main") == {"test", "lint"}
+
+    def test_returns_empty_set_when_no_contexts(self):
+        g = MagicMock()
+        rsc = MagicMock()
+        rsc.contexts = None
+        g.get_repo.return_value.get_branch.return_value.get_required_status_checks.return_value = rsc
+        assert get_required_check_names(g, "o", "r", "main") == set()
+
+    def test_returns_empty_set_on_unprotected_branch(self):
+        g = MagicMock()
+        g.get_repo.return_value.get_branch.return_value.get_required_status_checks.side_effect = \
+            GithubException(404, "Branch not protected", None)
+        assert get_required_check_names(g, "o", "r", "main") == set()

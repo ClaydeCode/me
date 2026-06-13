@@ -17,6 +17,7 @@ Clayde is assigned GitHub issues in software repositories. For each issue it:
 3. Posts a summary comment after each work cycle
 4. Opens a pull request (Claude creates the PR directly with a description and, for diffs spanning more than 3 files, a recommended reading order) and assigns the issue author as reviewer
 5. Monitors the PR and addresses review comments when they appear
+6. Monitors the PR's CI pipeline and, if a required check fails, autonomously diagnoses the failing job and pushes a fix
 
 Clayde runs as a Docker container in a continuous loop (default: every 5 minutes). Rather than a rigid state machine, it uses **timestamp-based activity detection**: each issue records the last time it was processed, and only new visible activity since that timestamp triggers a new Claude invocation.
 
@@ -34,6 +35,7 @@ Clayde's loop is event-driven and stateless by design:
 6. **Crash recovery**: `in_progress` is set before invoking Claude and cleared after. If the process crashes mid-run, the next cycle retries automatically.
 7. **Pure PR approvals** (no comments) update `last_seen_at` without invoking Claude.
 8. **Closed issues** are pruned from state automatically.
+9. **CI self-fix**: when an issue's PR is open and there is no new human activity, Clayde checks the PR head commit's CI status. If a required check has failed (and a fix has not already been attempted for that commit), Claude inspects the failing job logs and pushes a fix to the branch — up to `CLAYDE_CI_FIX_MAX_ATTEMPTS` times per PR, after which the operator is notified via ntfy. Green CI falls through to normal review monitoring.
 
 ---
 
@@ -59,6 +61,7 @@ Whitelisted users are configured via `CLAYDE_WHITELISTED_USERS` in `data/config.
 - **Full issue lifecycle**: Engage → implement → PR → review, all driven by new activity
 - **PR creation by Claude**: Claude writes the PR description and a recommended reading order for larger diffs
 - **PR review handling**: Reads and addresses reviewer feedback automatically
+- **CI self-healing**: Detects failing required checks on its own PRs and pushes fixes autonomously, with a per-PR attempt cap and operator notification
 - **Rate-limit resilience**: Detects Claude usage limits and automatically retries
 - **Crash recovery**: `in_progress` flag ensures interrupted runs are retried next cycle
 - **Safety filtering**: Whitelist-based content filtering prevents acting on unauthorized content
@@ -188,6 +191,7 @@ In any repository the bot has access to, assign issues to the bot account. Clayd
 | `CLAYDE_CLAUDE_BACKEND` | `api` (default) or `cli` |
 | `CLAYDE_CLAUDE_API_KEY` | Anthropic API key (required when backend=`api`) |
 | `CLAYDE_CLAUDE_MODEL` | Model to use (default: `claude-opus-4-6`) |
+| `CLAYDE_CI_FIX_MAX_ATTEMPTS` | Max autonomous CI-fix attempts per PR before notifying (default: `3`) |
 | `CLAYDE_PEBBLE_ENABLED` | Set to `true` to enable the Pebble webhook |
 | `CLAYDE_PEBBLE_TOKEN` | Bearer token the Pebble app sends |
 | `CLAYDE_PEBBLE_HOST` | Public hostname for Traefik routing |

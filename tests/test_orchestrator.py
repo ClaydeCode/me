@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from clayde.orchestrator import (
+    _handle_ci_fix,
     _handle_issue,
     _handle_standalone_pr,
     _is_pr_tracked_as_issue,
@@ -753,3 +754,217 @@ class TestMergeDetection:
 
         mock_wrap_up.run.assert_not_called()
         mock_work.run.assert_called_once_with(issue.html_url)
+
+
+def _ci_settings(max_attempts=3, ntfy_topic="topic"):
+    s = MagicMock()
+    s.ci_fix_max_attempts = max_attempts
+    s.ntfy_topic = ntfy_topic
+    s.ntfy_base_url = "https://ntfy.sh"
+    s.ntfy_timeout_s = 10
+    return s
+
+
+def _ci_pr(head_sha="sha-new", base_ref="main", head_ref="clayde/issue-86"):
+    pr = MagicMock()
+    pr.head.sha = head_sha
+    pr.base.ref = base_ref
+    pr.head.ref = head_ref
+    return pr
+
+
+class TestHandleCiFix:
+    """Unit tests for _handle_ci_fix — CI monitoring and self-fix."""
+
+    PR_URL = "https://github.com/o/r/pull/5"
+    URL = "https://github.com/o/r/issues/86"
+
+    def _run(self, *, failed, required=set(), issue_state, settings=None,
+             fix_side_effect=None):
+        settings = settings or _ci_settings()
+        span = MagicMock()
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 5)), \
+             patch("clayde.orchestrator.get_pull", return_value=_ci_pr()), \
+             patch("clayde.orchestrator.get_check_runs", return_value=failed), \
+             patch("clayde.orchestrator.get_required_check_names", return_value=required), \
+             patch("clayde.orchestrator.get_issue_state", return_value=issue_state), \
+             patch("clayde.orchestrator.get_settings", return_value=settings), \
+             patch("clayde.orchestrator.update_issue_state") as mock_update, \
+             patch("clayde.orchestrator.send_ntfy_sync") as mock_ntfy, \
+             patch("clayde.orchestrator.fix_ci") as mock_fix:
+            if fix_side_effect:
+                mock_fix.run.side_effect = fix_side_effect
+            result = _handle_ci_fix(MagicMock(), "o", "r", self.PR_URL, self.URL,
+                                    "label", span)
+        return result, mock_update, mock_ntfy, mock_fix
+
+    def test_green_ci_returns_false(self):
+        result, _, _, mock_fix = self._run(failed=[], issue_state={})
+        assert result is False
+        mock_fix.run.assert_not_called()
+
+    def test_invokes_fix_when_failing_and_no_prior_attempt(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        result, mock_update, _, mock_fix = self._run(failed=failed, issue_state={})
+        assert result is True
+        mock_fix.run.assert_called_once_with(
+            self.URL, self.PR_URL, "clayde/issue-86", failed)
+
+    def test_records_attempt_before_invoking(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        _, mock_update, _, _ = self._run(failed=failed, issue_state={})
+        recorded = [c[0][1] for c in mock_update.call_args_list]
+        assert any(
+            u.get("ci_fix_attempts") == 1 and u.get("last_ci_fix_attempt_sha") == "sha-new"
+            for u in recorded
+        )
+
+    def test_advances_last_seen_at_on_success(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        _, mock_update, _, _ = self._run(failed=failed, issue_state={})
+        assert any("last_seen_at" in c[0][1] for c in mock_update.call_args_list)
+
+    def test_skips_when_same_sha_already_attempted(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        result, _, _, mock_fix = self._run(
+            failed=failed,
+            issue_state={"last_ci_fix_attempt_sha": "sha-new", "ci_fix_attempts": 1},
+        )
+        assert result is True
+        mock_fix.run.assert_not_called()
+
+    def test_notifies_once_when_attempts_exhausted(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        result, mock_update, mock_ntfy, mock_fix = self._run(
+            failed=failed,
+            issue_state={"ci_fix_attempts": 3},
+        )
+        assert result is True
+        mock_fix.run.assert_not_called()
+        mock_ntfy.assert_called_once()
+        assert any(c[0][1].get("ci_fix_exhausted_notified") for c in mock_update.call_args_list)
+
+    def test_does_not_renotify_when_already_notified(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        _, _, mock_ntfy, _ = self._run(
+            failed=failed,
+            issue_state={"ci_fix_attempts": 3, "ci_fix_exhausted_notified": True},
+        )
+        mock_ntfy.assert_not_called()
+
+    def test_required_filter_excludes_informational_checks(self):
+        # Failing check "lint" is not in the required set → treated as green.
+        failed = [{"name": "lint", "conclusion": "failure", "details_url": "u"}]
+        result, _, _, mock_fix = self._run(
+            failed=failed, required={"test"}, issue_state={})
+        assert result is False
+        mock_fix.run.assert_not_called()
+
+    def test_required_filter_keeps_required_failure(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        result, _, _, mock_fix = self._run(
+            failed=failed, required={"test"}, issue_state={})
+        assert result is True
+        mock_fix.run.assert_called_once()
+
+    def test_usage_limit_during_fix_returns_true(self):
+        from clayde.claude import UsageLimitError
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        result, mock_update, _, _ = self._run(
+            failed=failed, issue_state={},
+            fix_side_effect=UsageLimitError("limit", cost_eur=0.0))
+        assert result is True
+        # last_seen_at must NOT be advanced on a limited run
+        assert not any("last_seen_at" in c[0][1] for c in mock_update.call_args_list)
+
+    def test_unexpected_error_during_fix_returns_true(self):
+        failed = [{"name": "test", "conclusion": "failure", "details_url": "u"}]
+        result, _, _, _ = self._run(
+            failed=failed, issue_state={},
+            fix_side_effect=RuntimeError("boom"))
+        assert result is True
+
+    def test_pr_fetch_failure_returns_false(self):
+        span = MagicMock()
+        with patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 5)), \
+             patch("clayde.orchestrator.get_pull", side_effect=Exception("API error")), \
+             patch("clayde.orchestrator.get_settings", return_value=_ci_settings()), \
+             patch("clayde.orchestrator.fix_ci") as mock_fix:
+            result = _handle_ci_fix(MagicMock(), "o", "r", self.PR_URL, self.URL,
+                                    "label", span)
+        assert result is False
+        mock_fix.run.assert_not_called()
+
+
+class TestHandleIssueCiIntegration:
+    """_handle_issue should route to CI fix when there is no human activity."""
+
+    def _patches(self, pr_url="https://github.com/o/r/pull/5"):
+        return [
+            patch("clayde.orchestrator.is_blocked", return_value=False),
+            patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 86)),
+            patch("clayde.orchestrator.fetch_issue_comments", return_value=[]),
+            patch("clayde.orchestrator.has_visible_content", return_value=True),
+            patch("clayde.orchestrator.get_issue_state", return_value={
+                "pr_url": pr_url,
+                "last_seen_at": "2024-01-01T12:00:00+00:00",
+            }),
+            patch("clayde.orchestrator.parse_pr_url", return_value=("o", "r", 5)),
+            patch("clayde.orchestrator.get_pull", return_value=MagicMock(merged=False)),
+            patch("clayde.orchestrator.get_pr_reviews", return_value=[]),
+            patch("clayde.orchestrator.get_pr_review_comments", return_value=[]),
+            patch("clayde.orchestrator.get_new_visible_comments", return_value=[]),
+            patch("clayde.orchestrator.update_issue_state"),
+            patch("clayde.orchestrator.get_settings", return_value=_mock_settings()),
+        ]
+
+    def test_ci_fix_invoked_when_no_activity_and_pr_open(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/86"
+        issue.title = "Feature"
+        with ExitStack() as stack:
+            for p in self._patches():
+                stack.enter_context(p)
+            mock_ci = stack.enter_context(
+                patch("clayde.orchestrator._handle_ci_fix", return_value=True))
+            mock_work = stack.enter_context(patch("clayde.orchestrator.work"))
+            _handle_issue(g, issue, issue.html_url)
+        mock_ci.assert_called_once()
+        mock_work.run.assert_not_called()
+
+    def test_ci_fix_not_invoked_when_human_activity(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/86"
+        issue.title = "Feature"
+        with ExitStack() as stack:
+            for p in self._patches():
+                stack.enter_context(p)
+            # New comment present → work task handles it, CI fix skipped this cycle.
+            stack.enter_context(
+                patch("clayde.orchestrator.get_new_visible_comments",
+                      return_value=[MagicMock()]))
+            mock_ci = stack.enter_context(patch("clayde.orchestrator._handle_ci_fix"))
+            mock_work = stack.enter_context(patch("clayde.orchestrator.work"))
+            _handle_issue(g, issue, issue.html_url)
+        mock_ci.assert_not_called()
+        mock_work.run.assert_called_once_with(issue.html_url)
+
+    def test_no_ci_check_when_no_pr(self):
+        g = MagicMock()
+        issue = MagicMock()
+        issue.html_url = "https://github.com/o/r/issues/86"
+        issue.title = "Feature"
+        with patch("clayde.orchestrator.is_blocked", return_value=False), \
+             patch("clayde.orchestrator.parse_issue_url", return_value=("o", "r", 86)), \
+             patch("clayde.orchestrator.fetch_issue_comments", return_value=[]), \
+             patch("clayde.orchestrator.has_visible_content", return_value=True), \
+             patch("clayde.orchestrator.get_issue_state",
+                   return_value={"last_seen_at": "2024-01-01T12:00:00+00:00"}), \
+             patch("clayde.orchestrator.get_new_visible_comments", return_value=[]), \
+             patch("clayde.orchestrator._handle_ci_fix") as mock_ci, \
+             patch("clayde.orchestrator.work") as mock_work:
+            _handle_issue(g, issue, issue.html_url)
+        mock_ci.assert_not_called()
+        mock_work.run.assert_not_called()

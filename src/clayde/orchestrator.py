@@ -34,9 +34,11 @@ from clayde.github import (
     fetch_issue,
     fetch_issue_comments,
     get_assigned_issues,
+    get_check_runs,
     get_pr_review_comments,
     get_pr_reviews,
     get_pull,
+    get_required_check_names,
     is_blocked,
     is_pull_request_item,
     issue_ref,
@@ -45,8 +47,9 @@ from clayde.github import (
 )
 from clayde.safety import filter_pr_reviews, get_new_visible_comments, has_visible_content
 from clayde.state import get_issue_state, load_state, save_state, update_issue_state
-from clayde.tasks import work, wrap_up, pr_work
+from clayde.tasks import fix_ci, work, wrap_up, pr_work
 from clayde.telemetry import get_tracer, init_tracer
+from clayde.webhook.notify import send_ntfy_sync
 
 log = logging.getLogger("clayde.orchestrator")
 
@@ -162,34 +165,145 @@ def _handle_issue(g: Github, issue: Issue, url: str) -> None:
 
         should_invoke = in_progress or (last_seen_at is None) or bool(new_comments) or has_new_review_activity
 
-        if not should_invoke:
-            log.info("[%s] No new activity — skipping", label)
-            span.set_attribute("issue.skip_reason", "no_new_activity")
+        if should_invoke:
+            # Mark in_progress before invoking Claude so a crash leaves a retry marker
+            update_issue_state(url, {"in_progress": True})
+
+            log.info("[%s] New activity — invoking work task", label)
+            try:
+                work.run(url)
+            except (UsageLimitError, InvocationTimeoutError) as e:
+                log.warning("[%s] Usage/timeout limit — will retry next cycle: %s", label, e)
+                span.set_attribute("issue.status", "retry")
+                # in_progress stays True so the next cycle retries automatically
+                return
+            except Exception as e:
+                log.error("[%s] ERROR in work task: %s", label, e)
+                span.set_status(StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                update_issue_state(url, {"in_progress": False})
+                return
+
+            # Successful completion — update last_seen_at to prevent re-triggering on
+            # Clayde's own comments posted during this run
+            update_issue_state(url, {"in_progress": False, "last_seen_at": _now_utc()})
+            span.set_attribute("issue.status", "completed")
+            log.info("[%s] Cycle complete", label)
             return
 
-        # Mark in_progress before invoking Claude so a crash leaves a retry marker
-        update_issue_state(url, {"in_progress": True})
-
-        log.info("[%s] New activity — invoking work task", label)
-        try:
-            work.run(url)
-        except (UsageLimitError, InvocationTimeoutError) as e:
-            log.warning("[%s] Usage/timeout limit — will retry next cycle: %s", label, e)
-            span.set_attribute("issue.status", "retry")
-            # in_progress stays True so the next cycle retries automatically
-            return
-        except Exception as e:
-            log.error("[%s] ERROR in work task: %s", label, e)
-            span.set_status(StatusCode.ERROR, str(e))
-            span.record_exception(e)
-            update_issue_state(url, {"in_progress": False})
+        # No new human activity. If a PR is open, monitor its CI and self-fix a
+        # failing pipeline before falling back to "nothing to do".
+        if pr_url and _handle_ci_fix(g, owner, repo, pr_url, url, label, span):
             return
 
-        # Successful completion — update last_seen_at to prevent re-triggering on
-        # Clayde's own comments posted during this run
-        update_issue_state(url, {"in_progress": False, "last_seen_at": _now_utc()})
-        span.set_attribute("issue.status", "completed")
-        log.info("[%s] Cycle complete", label)
+        log.info("[%s] No new activity — skipping", label)
+        span.set_attribute("issue.skip_reason", "no_new_activity")
+
+
+def _handle_ci_fix(g: Github, owner: str, repo: str, pr_url: str, url: str,
+                   label: str, span) -> bool:
+    """Monitor CI on the open PR and self-fix a failing required pipeline.
+
+    Returns True when CI handling has consumed this cycle (a fix was attempted,
+    the PR is waiting on a previous fix for the same commit, or the attempt
+    budget is exhausted) so the caller should stop.  Returns False when CI is
+    green, still pending, or has no failing required checks — the caller then
+    falls through to its normal "no new activity" handling.
+
+    Loop-safety: the attempt counter and the attempted head SHA are recorded
+    *before* invoking Claude, so a crash or usage limit can never cause an
+    endless retry on the same commit.
+    """
+    settings = get_settings()
+    try:
+        _, _, pr_number = parse_pr_url(pr_url)
+        pr = get_pull(g, owner, repo, pr_number)
+        head_sha = pr.head.sha
+        base_branch = pr.base.ref
+    except Exception as e:
+        log.warning("[%s] Failed to fetch PR for CI check: %s", label, e)
+        return False
+
+    try:
+        failed = get_check_runs(g, owner, repo, head_sha)
+        required = get_required_check_names(g, owner, repo, base_branch)
+        if required:
+            # Branch protection defines required checks — only act on those.
+            failed = [f for f in failed if f["name"] in required]
+        # When no required checks are configured, every failed check is treated
+        # as blocking (fallback for unprotected branches).
+    except Exception as e:
+        log.warning("[%s] Failed to fetch CI status: %s", label, e)
+        return False
+
+    if not failed:
+        return False  # CI green / pending — proceed with review monitoring
+
+    issue_state = get_issue_state(url)
+    attempts = issue_state.get("ci_fix_attempts", 0)
+    max_attempts = settings.ci_fix_max_attempts
+
+    if attempts >= max_attempts:
+        if not issue_state.get("ci_fix_exhausted_notified"):
+            log.warning("[%s] CI still failing after %d attempts — notifying operator",
+                        label, attempts)
+            _notify_ci_exhausted(settings, owner, repo, pr_number, attempts)
+            update_issue_state(url, {"ci_fix_exhausted_notified": True})
+        span.set_attribute("issue.skip_reason", "ci_fix_exhausted")
+        return True
+
+    if issue_state.get("last_ci_fix_attempt_sha") == head_sha:
+        # Already attempted a fix for this exact commit — wait for new activity
+        # (a new push, review, or comment) rather than looping on the same SHA.
+        log.info("[%s] CI failing but fix already attempted for %s — waiting",
+                 label, head_sha[:7])
+        span.set_attribute("issue.skip_reason", "ci_fix_already_attempted")
+        return True
+
+    branch_name = issue_state.get("branch_name", pr.head.ref)
+    check_names = ", ".join(f["name"] for f in failed)
+    log.info("[%s] CI failing (%s) — invoking fix task (attempt %d/%d)",
+             label, check_names, attempts + 1, max_attempts)
+
+    # Record the attempt *before* invoking so a crash/limit cannot loop on this
+    # SHA, and so the attempt counts toward the max-attempts budget.
+    update_issue_state(url, {
+        "ci_fix_attempts": attempts + 1,
+        "last_ci_fix_attempt_sha": head_sha,
+    })
+
+    try:
+        fix_ci.run(url, pr_url, branch_name, failed)
+    except (UsageLimitError, InvocationTimeoutError) as e:
+        log.warning("[%s] Usage/timeout limit during CI fix — will retry on a new commit: %s",
+                    label, e)
+        span.set_attribute("issue.status", "ci_fix_retry")
+        return True
+    except Exception as e:
+        log.error("[%s] ERROR in CI fix task: %s", label, e)
+        span.set_status(StatusCode.ERROR, str(e))
+        span.record_exception(e)
+        return True
+
+    # Advance last_seen_at so Clayde's own summary comment does not re-trigger.
+    update_issue_state(url, {"last_seen_at": _now_utc()})
+    span.set_attribute("issue.status", "ci_fix_attempted")
+    log.info("[%s] CI fix attempt complete", label)
+    return True
+
+
+def _notify_ci_exhausted(settings, owner: str, repo: str, pr_number: int, attempts: int) -> None:
+    """Send an ntfy alert that CI is still failing after the attempt budget."""
+    if not settings.ntfy_topic:
+        return
+    send_ntfy_sync(
+        title="Clayde: CI still failing",
+        body=f"CI still failing after {attempts} attempts on {owner}/{repo}#{pr_number}",
+        success=False,
+        base_url=settings.ntfy_base_url,
+        topic=settings.ntfy_topic,
+        timeout_s=settings.ntfy_timeout_s,
+    )
 
 
 def _handle_standalone_pr(g: Github, url: str) -> None:

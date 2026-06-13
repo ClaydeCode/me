@@ -193,3 +193,52 @@ def get_pr_title(g: Github, owner: str, repo: str, pr_number: int) -> str:
 def get_pull(g: Github, owner: str, repo: str, pr_number: int):
     """Return the PullRequest object for the given PR number."""
     return _get_repo(g, owner, repo).get_pull(pr_number)
+
+
+# ---------------------------------------------------------------------------
+# CI / check-run helpers
+# ---------------------------------------------------------------------------
+
+# Check-run conclusions that represent a failed / blocking pipeline. "neutral",
+# "skipped", "success" and "stale" are not treated as failures; queued and
+# in-progress runs are ignored until they complete.
+_FAILED_CONCLUSIONS = frozenset(
+    {"failure", "timed_out", "action_required", "startup_failure"}
+)
+
+
+def get_check_runs(g: Github, owner: str, repo: str, ref: str) -> list[dict]:
+    """Return the *failed* check runs for a commit SHA via the Checks API.
+
+    Only completed runs whose conclusion is in ``_FAILED_CONCLUSIONS`` are
+    returned; queued, in-progress, successful, skipped and neutral runs are
+    omitted.  Each item is a dict with ``name``, ``conclusion`` and
+    ``details_url`` (the URL of the failing job's logs).
+    """
+    commit = _get_repo(g, owner, repo).get_commit(ref)
+    failed: list[dict] = []
+    for run in commit.get_check_runs():
+        if run.status == "completed" and run.conclusion in _FAILED_CONCLUSIONS:
+            failed.append({
+                "name": run.name,
+                "conclusion": run.conclusion,
+                "details_url": run.details_url or run.html_url or "",
+            })
+    return failed
+
+
+def get_required_check_names(g: Github, owner: str, repo: str, branch: str) -> set[str]:
+    """Return the set of required status-check names from branch protection.
+
+    Returns an empty set when the branch is unprotected or the required checks
+    cannot be read (e.g. insufficient token permissions).  Callers treat an
+    empty set as "no required-check filter" — every failed check is then
+    considered blocking.
+    """
+    try:
+        b = _get_repo(g, owner, repo).get_branch(branch)
+        required = b.get_required_status_checks()
+        return set(required.contexts or [])
+    except Exception as e:
+        log.info("No required status checks for %s/%s@%s: %s", owner, repo, branch, e)
+        return set()
