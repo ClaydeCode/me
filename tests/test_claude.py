@@ -9,6 +9,7 @@ import pytest
 
 from clayde.claude import (
     ApiBackend,
+    ClaudeStatus,
     CliBackend,
     InvocationResult,
     InvocationTimeoutError,
@@ -17,6 +18,7 @@ from clayde.claude import (
     _get_backend,
     _is_limit_error,
     _make_cli_env,
+    check_claude_availability,
     format_cost_line,
     invoke_claude,
     is_claude_available,
@@ -397,9 +399,9 @@ class TestApiBackendIsAvailable:
 
         with patch.object(backend, "_get_client", return_value=mock_client), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()):
-            assert backend.is_available() is True
+            assert backend.check_availability() is ClaudeStatus.AVAILABLE
 
-    def test_unavailable_on_rate_limit(self):
+    def test_usage_limit_on_rate_limit(self):
         mock_client = MagicMock()
         mock_client.messages.create.side_effect = anthropic.RateLimitError(
             message="rate limit", response=MagicMock(), body={}
@@ -408,7 +410,20 @@ class TestApiBackendIsAvailable:
 
         with patch.object(backend, "_get_client", return_value=mock_client), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()):
-            assert backend.is_available() is False
+            assert backend.check_availability() is ClaudeStatus.USAGE_LIMIT
+
+    def test_auth_failed_on_authentication_error(self):
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_client.messages.create.side_effect = anthropic.AuthenticationError(
+            message="invalid api key", response=mock_response, body={}
+        )
+        backend = ApiBackend()
+
+        with patch.object(backend, "_get_client", return_value=mock_client), \
+             patch("clayde.claude.get_settings", return_value=_mock_settings()):
+            assert backend.check_availability() is ClaudeStatus.AUTH_FAILED
 
     def test_available_on_other_exception(self):
         mock_client = MagicMock()
@@ -417,7 +432,7 @@ class TestApiBackendIsAvailable:
 
         with patch.object(backend, "_get_client", return_value=mock_client), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()):
-            assert backend.is_available() is True
+            assert backend.check_availability() is ClaudeStatus.AVAILABLE
 
     def test_available_on_api_error_non_rate_limit(self):
         mock_client = MagicMock()
@@ -430,7 +445,7 @@ class TestApiBackendIsAvailable:
 
         with patch.object(backend, "_get_client", return_value=mock_client), \
              patch("clayde.claude.get_settings", return_value=_mock_settings()):
-            assert backend.is_available() is True
+            assert backend.check_availability() is ClaudeStatus.AVAILABLE
 
 
 class TestCommitWip:
@@ -936,9 +951,9 @@ class TestCliBackendIsAvailable:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
              patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
              patch("clayde.claude.subprocess.run", return_value=mock_result):
-            assert backend.is_available() is True
+            assert backend.check_availability() is ClaudeStatus.AVAILABLE
 
-    def test_unavailable_on_limit(self):
+    def test_usage_limit_on_limit(self):
         mock_result = MagicMock()
         mock_result.stdout = "{}"
         mock_result.stderr = "You've reached your usage limit"
@@ -948,9 +963,9 @@ class TestCliBackendIsAvailable:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
              patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
              patch("clayde.claude.subprocess.run", return_value=mock_result):
-            assert backend.is_available() is False
+            assert backend.check_availability() is ClaudeStatus.USAGE_LIMIT
 
-    def test_unavailable_on_not_logged_in(self):
+    def test_auth_failed_on_not_logged_in(self):
         mock_result = MagicMock()
         mock_result.stdout = '{"is_error": true, "result": "Not logged in \\u00b7 Please run /login"}'
         mock_result.stderr = ""
@@ -960,9 +975,9 @@ class TestCliBackendIsAvailable:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
              patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
              patch("clayde.claude.subprocess.run", return_value=mock_result):
-            assert backend.is_available() is False
+            assert backend.check_availability() is ClaudeStatus.AUTH_FAILED
 
-    def test_unavailable_on_failed_to_authenticate(self):
+    def test_auth_failed_on_failed_to_authenticate(self):
         mock_result = MagicMock()
         mock_result.stdout = json.dumps({
             "is_error": True,
@@ -979,7 +994,7 @@ class TestCliBackendIsAvailable:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
              patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
              patch("clayde.claude.subprocess.run", return_value=mock_result):
-            assert backend.is_available() is False
+            assert backend.check_availability() is ClaudeStatus.AUTH_FAILED
 
     def test_available_on_exception(self):
         backend = CliBackend()
@@ -987,7 +1002,7 @@ class TestCliBackendIsAvailable:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="cli")), \
              patch("clayde.claude._resolve_cli_bin", return_value="/usr/bin/claude"), \
              patch("clayde.claude.subprocess.run", side_effect=FileNotFoundError("not found")):
-            assert backend.is_available() is True
+            assert backend.check_availability() is ClaudeStatus.AVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -1026,3 +1041,20 @@ class TestModuleLevelDispatch:
         with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="api")), \
              patch.object(ApiBackend, "_get_client", return_value=mock_client):
             assert is_claude_available() is True
+
+    def test_check_claude_availability_dispatches(self):
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = MagicMock()
+
+        with patch("clayde.claude.get_settings", return_value=_mock_settings(backend="api")), \
+             patch.object(ApiBackend, "_get_client", return_value=mock_client):
+            assert check_claude_availability() is ClaudeStatus.AVAILABLE
+
+    def test_is_claude_available_false_on_auth_failure(self):
+        with patch(
+            "clayde.claude._get_backend",
+            return_value=MagicMock(
+                check_availability=MagicMock(return_value=ClaudeStatus.AUTH_FAILED)
+            ),
+        ):
+            assert is_claude_available() is False

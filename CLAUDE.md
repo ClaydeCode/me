@@ -154,6 +154,17 @@ leave `in_progress=True` so the next cycle retries automatically. Other
 exceptions clear `in_progress` and log the error. Closed issues are pruned
 from state at the start of each tick.
 
+**Availability pre-check**: each tick begins with
+`check_claude_availability()` (`claude.py`), which returns a `ClaudeStatus`
+of `AVAILABLE`, `USAGE_LIMIT`, or `AUTH_FAILED`. A usage limit skips the cycle
+silently (transient — retried next tick). An auth failure (expired/replaced
+credentials) sends a one-shot high-priority ntfy alert ("Clayde: Claude CLI
+auth failed") so the operator can re-authenticate and restart. The alert
+fires once per failure streak — tracked by the top-level
+`claude_auth_failure_notified` flag in `state.json`
+(`get_claude_auth_notified()` / `set_claude_auth_notified()`) — and re-arms
+when Claude becomes reachable again.
+
 ---
 
 ## Safety & Content Filtering
