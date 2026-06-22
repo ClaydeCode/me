@@ -12,15 +12,15 @@ a tiny JSON file so the 5-minute tick loop doesn't spam the same warning.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
 import time
 from pathlib import Path
 
-import httpx
-
 from clayde.config import DATA_DIR, Settings
+from clayde.webhook.notify import send_ntfy
 
 log = logging.getLogger("clayde.disk")
 
@@ -44,24 +44,29 @@ def _write_last_alert_ts(path: Path, ts: float) -> None:
 
 
 def _send(settings: Settings, *, usage_pct: int, free_gb: float) -> None:
-    """POST a disk-full warning to ntfy. Best-effort: errors are logged."""
-    url = f"{settings.ntfy_base_url.rstrip('/')}/{settings.ntfy_topic}"
-    headers = {
-        "Title": f"clayde.net disk {usage_pct}% full",
-        "Priority": "5",
-        "Tags": "floppy_disk,warning",
-    }
+    """Emit a disk-full warning via the shared ntfy helper.
+
+    Reuses ``webhook.notify.send_ntfy`` (itself best-effort — errors logged,
+    never raised). ``success=False`` gives it warning styling (priority 5,
+    rotating_light tag). Called from the sync tick loop, so the async helper
+    is driven via ``asyncio.run`` — safe here because ``main()`` never runs
+    inside an active event loop (in Pebble mode it runs via ``to_thread``).
+    """
+    title = f"clayde.net disk {usage_pct}% full"
     body = (
         f"Only {free_gb:.1f} GB free on {settings.disk_alert_path}. "
         "Run disk cleanup (KB: vm-disk-cleanup)."
     )
-    try:
-        with httpx.Client(timeout=settings.ntfy_timeout_s) as client:
-            resp = client.post(url, content=body, headers=headers)
-        if resp.status_code >= 400:
-            log.warning("disk alert ntfy returned %d", resp.status_code)
-    except Exception as exc:
-        log.warning("disk alert ntfy failed: %s", exc)
+    asyncio.run(
+        send_ntfy(
+            title=title,
+            body=body,
+            success=False,
+            base_url=settings.ntfy_base_url,
+            topic=settings.ntfy_topic,
+            timeout_s=settings.ntfy_timeout_s,
+        )
+    )
 
 
 def check_disk_and_alert(

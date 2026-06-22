@@ -76,6 +76,19 @@ class TestCheckDiskAndAlert:
         assert pct is None
         assert sent == []
 
+    def test_send_uses_shared_ntfy_helper(self, monkeypatch):
+        calls = []
+
+        async def fake_send_ntfy(**kw):
+            calls.append(kw)
+
+        monkeypatch.setattr(clayde.disk, "send_ntfy", fake_send_ntfy)
+        clayde.disk._send(_settings(), usage_pct=91, free_gb=4.2)
+        assert len(calls) == 1
+        assert calls[0]["success"] is False
+        assert calls[0]["topic"] == _settings().ntfy_topic
+        assert "91%" in calls[0]["title"]
+
     def test_usage_error_swallowed(self, monkeypatch, tmp_path):
         def boom(_p):
             raise OSError("no such path")
