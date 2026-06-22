@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     ntfy_base_url: str = "https://ntfy.sh"
     ntfy_timeout_s: int = 10
 
+    # Disk-usage self-check (alerts via ntfy when the host disk fills up)
+    disk_alert_enabled: bool = True
+    disk_alert_threshold_pct: int = 85
+    disk_alert_path: str = "/data"  # same partition as the host root volume
+    disk_alert_cooldown_s: int = 21600  # 6h — avoid re-alerting every cycle
+
     # Knowledge base (default cwd for Pebble runs)
     kb_path: str = "/home/clayde/knowledge_base"
 

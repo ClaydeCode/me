@@ -61,6 +61,8 @@ src/clayde/
   telemetry.py          # OpenTelemetry tracing: init_tracer(), get_tracer(),
                         #   FileSpanExporter (JSONL)
   orchestrator.py       # main() — single cycle, run_loop() — container entry point
+  disk.py               # check_disk_and_alert() — best-effort host disk guard,
+                        #   ntfy alert (cooldown-rate-limited) when usage ≥ threshold
   prompts/
     work.j2             # Jinja2 template for the unified work prompt
   tasks/
@@ -118,6 +120,10 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 | `CLAYDE_NTFY_BASE_URL` | ntfy base URL (override for self-host) |
 | `CLAYDE_NTFY_TIMEOUT_S` | ntfy POST timeout seconds (default 10) |
 | `CLAYDE_KB_PATH` | In-container KB path; Pebble per-request cwd (default `/home/clayde/knowledge_base`) |
+| `CLAYDE_DISK_ALERT_ENABLED` | Enable the per-tick disk-usage guard (default `true`) |
+| `CLAYDE_DISK_ALERT_THRESHOLD_PCT` | Usage % that triggers an ntfy alert (default `85`) |
+| `CLAYDE_DISK_ALERT_PATH` | Path whose partition is checked — same volume as host root (default `/data`) |
+| `CLAYDE_DISK_ALERT_COOLDOWN_S` | Min seconds between repeat alerts while over threshold (default `21600`) |
 
 Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at startup for the `gh` CLI.
 

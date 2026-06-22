@@ -29,6 +29,7 @@ from github.Issue import Issue
 
 from clayde.claude import InvocationTimeoutError, UsageLimitError, is_claude_available
 from clayde.config import get_github_client, get_settings, setup_logging
+from clayde.disk import check_disk_and_alert
 from clayde.webhook import JobQueue, create_app, worker_loop
 from clayde.github import (
     fetch_issue,
@@ -323,6 +324,13 @@ def main():
         sys.exit(0)
 
     log.info("=== Starting Clayde Tick [%s] ===", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+    # Disk-usage guard runs before any work so it still fires when Claude is
+    # rate-limited — a full disk would break everything else regardless.
+    try:
+        check_disk_and_alert(settings)
+    except Exception:
+        log.exception("disk usage check failed")
 
     os.environ["GH_TOKEN"] = settings.github_token
 
