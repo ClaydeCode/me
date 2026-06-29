@@ -4,6 +4,7 @@ tick() runs one full pass over all open issues assigned to the bot,
 derives the phase from GitHub-observable facts, and routes to the
 matching handler. No local state — all phase input comes from GitHub.
 """
+import concurrent.futures
 import logging
 
 from clayde.freeshard.phase import Phase, derive_phase
@@ -75,52 +76,69 @@ def _route(
         log.warning("%s — unknown phase %s, skipping", ref, phase)
 
 
+def _process_issue(g, settings, issue) -> bool:
+    """Process a single issue. Returns True iff the issue was routed (counted)."""
+    try:
+        owner, repo, number = parse_issue_url(issue.html_url)
+        ref = f"{owner}/{repo}#{number}"
+
+        if not is_non_core(repo):
+            log.info("Skipping core repo %s (Phase 3)", ref)
+            return False
+
+        if is_blocked(g, owner, repo, number):
+            log.info("%s is blocked — skipping", ref)
+            return False
+
+        default_branch = get_default_branch(g, owner, repo)
+        branch = f"clayde/issue-{number}"
+        pr_url = find_open_pr(g, owner, repo, branch)
+        pr_open = pr_url is not None
+
+        pr_number: int | None = None
+        head: str | None = None
+        ci = None
+        is_rev = False
+        fix_attempts = 0
+
+        if pr_open:
+            _, _, pr_number = parse_pr_url(pr_url)
+            head = g.get_repo(f"{owner}/{repo}").get_pull(pr_number).head.sha
+            ci = get_ci_status(g, owner, repo, head)
+            is_rev = is_reviewer_assigned(g, owner, repo, pr_number, settings.fs_reviewer)
+            fix_attempts = count_fix_commits(g, owner, repo, branch)
+
+        phase = derive_phase(
+            pr_open=pr_open,
+            ci_status=ci,
+            max_is_reviewer=bool(is_rev),
+            fix_attempts=fix_attempts,
+        )
+        log.info("%s — phase=%s", ref, phase)
+
+        _route(g, owner, repo, number, default_branch, pr_number, head, phase, settings)
+        return True
+
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Error processing %s: %s", issue.html_url, exc)
+        return False
+
+
 def tick(g, settings) -> int:
     """Process one pass over assigned issues. Returns count of routed issues."""
+    issues = list(get_assigned_issues(g))
+    parallelism = max(1, int(getattr(settings, "fs_parallelism", 1)))
+
+    if parallelism == 1:
+        return sum(1 if _process_issue(g, settings, issue) else 0 for issue in issues)
+
     processed = 0
-    for issue in get_assigned_issues(g):
-        try:
-            owner, repo, number = parse_issue_url(issue.html_url)
-            ref = f"{owner}/{repo}#{number}"
-
-            if not is_non_core(repo):
-                log.info("Skipping core repo %s (Phase 3)", ref)
-                continue
-
-            if is_blocked(g, owner, repo, number):
-                log.info("%s is blocked — skipping", ref)
-                continue
-
-            default_branch = get_default_branch(g, owner, repo)
-            branch = f"clayde/issue-{number}"
-            pr_url = find_open_pr(g, owner, repo, branch)
-            pr_open = pr_url is not None
-
-            pr_number: int | None = None
-            head: str | None = None
-            ci = None
-            is_rev = False
-            fix_attempts = 0
-
-            if pr_open:
-                _, _, pr_number = parse_pr_url(pr_url)
-                head = g.get_repo(f"{owner}/{repo}").get_pull(pr_number).head.sha
-                ci = get_ci_status(g, owner, repo, head)
-                is_rev = is_reviewer_assigned(g, owner, repo, pr_number, settings.fs_reviewer)
-                fix_attempts = count_fix_commits(g, owner, repo, branch)
-
-            phase = derive_phase(
-                pr_open=pr_open,
-                ci_status=ci,
-                max_is_reviewer=bool(is_rev),
-                fix_attempts=fix_attempts,
-            )
-            log.info("%s — phase=%s", ref, phase)
-
-            _route(g, owner, repo, number, default_branch, pr_number, head, phase, settings)
-            processed += 1
-
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Error processing %s: %s", issue.html_url, exc)
-
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallelism) as executor:
+        futures = [executor.submit(_process_issue, g, settings, issue) for issue in issues]
+        for f in futures:
+            try:
+                if f.result():
+                    processed += 1
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Unexpected error collecting future result: %s", exc)
     return processed
