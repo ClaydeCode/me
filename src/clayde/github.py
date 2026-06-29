@@ -12,6 +12,9 @@ from clayde.config import get_settings
 
 log = logging.getLogger("clayde.github")
 
+_FAILED_STATES = frozenset({"failure", "error", "cancelled", "timed_out", "action_required"})
+_PENDING_STATES = frozenset({"pending", "queued", "in_progress"})
+
 
 def _get_repo(g: Github, owner: str, repo: str):
     return g.get_repo(f"{owner}/{repo}")
@@ -193,3 +196,70 @@ def get_pr_title(g: Github, owner: str, repo: str, pr_number: int) -> str:
 def get_pull(g: Github, owner: str, repo: str, pr_number: int):
     """Return the PullRequest object for the given PR number."""
     return _get_repo(g, owner, repo).get_pull(pr_number)
+
+
+# ---------------------------------------------------------------------------
+# Freeshard loop observation helpers
+# ---------------------------------------------------------------------------
+
+def get_ci_status(g: Github, owner: str, repo: str, ref: str) -> str | None:
+    """Combined CI conclusion for a ref: success/failure/pending, or None if no checks.
+
+    Merges the legacy commit-status API and check-runs: failure dominates,
+    then pending, else success. None means nothing has reported yet.
+    """
+    commit = _get_repo(g, owner, repo).get_commit(ref)
+    states: list[str] = []
+
+    combined = commit.get_combined_status().state  # success|failure|pending|error
+    if combined and combined != "pending":
+        states.append("failure" if combined in ("failure", "error") else "success")
+    elif combined == "pending":
+        states.append("pending")
+
+    for run in commit.get_check_runs():
+        if run.status != "completed":
+            states.append("pending")
+        else:
+            states.append(run.conclusion or "failure")
+
+    if not states:
+        return None
+    if not _FAILED_STATES.isdisjoint(states):
+        return "failure"
+    if not _PENDING_STATES.isdisjoint(states):
+        return "pending"
+    return "success"
+
+
+def is_reviewer_assigned(g: Github, owner: str, repo: str, pr_number: int, login: str) -> bool:
+    """Return True if login has been requested as reviewer or has submitted a review."""
+    pr = _get_repo(g, owner, repo).get_pull(pr_number)
+    requested_users, _ = pr.get_review_requests()
+    if any(u.login.lower() == login.lower() for u in requested_users):
+        return True
+    return any(r.user and r.user.login.lower() == login.lower() for r in pr.get_reviews())
+
+
+def count_fix_commits(g: Github, owner: str, repo: str, branch: str, default_branch: str) -> int:
+    """Return number of commits unique to branch whose message starts with 'fix(ci):'.
+
+    Uses the compare API so only branch-unique commits are counted — base-branch
+    history containing 'fix(ci):' commits cannot inflate fix_attempts.
+    """
+    commits = _get_repo(g, owner, repo).compare(default_branch, branch).commits
+    return sum(1 for c in commits if c.commit.message.startswith("fix(ci):"))
+
+
+def has_ci_workflows(g: Github, owner: str, repo: str) -> bool:
+    """Return True if the repo has any file under .github/workflows/.
+
+    Uses the contents API. Returns False on 404 or any GithubException
+    (repo has no workflows directory). Defaults to True on other errors
+    (safer to wait for CI than to hand off prematurely).
+    """
+    try:
+        contents = _get_repo(g, owner, repo).get_contents(".github/workflows")
+        return bool(contents)
+    except GithubException:
+        return False

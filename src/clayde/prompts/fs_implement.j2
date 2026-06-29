@@ -1,0 +1,20 @@
+You are implementing issue #{{ number }} ({{ owner }}/{{ repo }}): {{ title }}
+
+The repository is checked out at {{ repo_path }} on branch {{ branch_name }}.
+This is a NON-CORE Freeshard card: implement the task described, no spec/plan gate.
+
+Issue body:
+{{ body }}
+
+{% if discussion_text %}Discussion / clarifications:
+{{ discussion_text }}
+{% endif %}
+
+Requirements:
+1. Implement the smallest change that fully satisfies the issue. No scope creep.
+2. Match existing code style. Touch only what the task requires.
+3. If a test runner is discoverable (justfile, package.json, pyproject.toml, Makefile),
+   add/adjust tests for the change and ensure the suite passes locally.
+4. Commit in small, story-ordered commits, each with a "what + why" message.
+5. Do NOT open a PR — the loop does that after local verify passes.
+6. Output a one-line JSON: {"summary": "<what you did, one sentence>"}.

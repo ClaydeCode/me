@@ -1,0 +1,10 @@
+CI failed on PR for issue #{{ number }} ({{ owner }}/{{ repo }}), branch {{ branch_name }},
+checked out at {{ repo_path }}.
+
+Failing CI log (tail):
+{{ ci_log }}
+
+Fix the failure with the minimal change. Re-run tests locally to confirm green.
+Commit the fix with a message that STARTS WITH "fix(ci): " (this prefix is how the
+loop counts fix attempts — do not omit it). Do not open or close any PR.
+Output a one-line JSON: {"summary": "<the fix, one sentence>"}.
