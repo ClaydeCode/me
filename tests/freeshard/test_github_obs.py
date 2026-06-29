@@ -19,12 +19,22 @@ def test_is_reviewer_assigned_true_when_login_present():
     assert is_reviewer_assigned(g, "o", "r", 5, "maxtepkasper")
 
 
-def test_count_fix_commits_counts_prefix():
+def test_count_fix_commits_counts_branch_unique_only():
     g = MagicMock()
     c1 = MagicMock(); c1.commit.message = "fix(ci): retry"
     c2 = MagicMock(); c2.commit.message = "feat: thing"
-    g.get_repo.return_value.get_commits.return_value = [c1, c2]
-    assert count_fix_commits(g, "o", "r", "clayde/issue-1") == 1
+    g.get_repo.return_value.compare.return_value.commits = [c1, c2]
+    assert count_fix_commits(g, "o", "r", "clayde/issue-1", "main") == 1
+    g.get_repo.return_value.compare.assert_called_once_with("main", "clayde/issue-1")
+
+
+def test_count_fix_commits_excludes_base_history():
+    """A fix(ci): commit reachable only via base branch must not be counted."""
+    g = MagicMock()
+    branch_commit = MagicMock(); branch_commit.commit.message = "feat: new thing"
+    # compare() returns only the branch-unique commit — base history not included
+    g.get_repo.return_value.compare.return_value.commits = [branch_commit]
+    assert count_fix_commits(g, "o", "r", "clayde/issue-1", "main") == 0
 
 
 def test_get_ci_status_failure_dominates_success():

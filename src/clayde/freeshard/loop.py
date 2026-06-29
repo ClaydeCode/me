@@ -8,7 +8,7 @@ import concurrent.futures
 import logging
 
 from clayde.freeshard.phase import Phase, derive_phase
-from clayde.freeshard.repos import is_non_core
+from clayde.freeshard.repos import is_non_core, verify_profile
 from clayde.freeshard.steps import (
     run_ci_fix,
     run_handoff,
@@ -22,6 +22,7 @@ from clayde.github import (
     get_ci_status,
     get_default_branch,
     is_blocked,
+    is_pull_request_item,
     is_reviewer_assigned,
     parse_issue_url,
     parse_pr_url,
@@ -78,6 +79,9 @@ def _route(
 
 def _process_issue(g, settings, issue) -> bool:
     """Process a single issue. Returns True iff the issue was routed (counted)."""
+    if is_pull_request_item(issue):
+        log.debug("Skipping PR item %s", issue.html_url)
+        return False
     try:
         owner, repo, number = parse_issue_url(issue.html_url)
         ref = f"{owner}/{repo}#{number}"
@@ -106,13 +110,15 @@ def _process_issue(g, settings, issue) -> bool:
             head = g.get_repo(f"{owner}/{repo}").get_pull(pr_number).head.sha
             ci = get_ci_status(g, owner, repo, head)
             is_rev = is_reviewer_assigned(g, owner, repo, pr_number, settings.fs_reviewer)
-            fix_attempts = count_fix_commits(g, owner, repo, branch)
+            fix_attempts = count_fix_commits(g, owner, repo, branch, default_branch)
 
+        ci_required = verify_profile(repo) != "none"
         phase = derive_phase(
             pr_open=pr_open,
             ci_status=ci,
             max_is_reviewer=bool(is_rev),
             fix_attempts=fix_attempts,
+            ci_required=ci_required,
         )
         log.info("%s — phase=%s", ref, phase)
 

@@ -229,3 +229,22 @@ def test_manual_verify_comment_mentions_hands(mock_apr, mock_pc, mock_rw):
     steps.run_manual_verify(g, "o", "r", 7, 9, "reviewer")
     comment_body = mock_pc.call_args[0][4]
     assert "needs your hands" in comment_body
+
+
+@patch("clayde.freeshard.steps.remove_worktree")
+@patch("clayde.freeshard.steps.post_comment")
+@patch("clayde.freeshard.steps.add_pr_reviewer")
+def test_manual_verify_is_idempotent(mock_apr, mock_pc, mock_rw):
+    """Second invocation when the label is already present must be a no-op."""
+    g = MagicMock()
+    existing_label = MagicMock()
+    existing_label.name = "manual-verify-required"
+    issue_obj = MagicMock()
+    issue_obj.get_labels.return_value = [existing_label]
+    g.get_repo.return_value.get_issue.return_value = issue_obj
+
+    steps.run_manual_verify(g, "o", "r", 7, 9, "reviewer")
+
+    mock_pc.assert_not_called()
+    mock_apr.assert_not_called()
+    issue_obj.add_to_labels.assert_not_called()

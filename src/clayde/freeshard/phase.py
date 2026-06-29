@@ -21,9 +21,12 @@ class Phase(StrEnum):
 
 
 def derive_phase(*, pr_open: bool, ci_status: str | None,
-                 max_is_reviewer: bool, fix_attempts: int, fix_cap: int = 2) -> Phase:
+                 max_is_reviewer: bool, fix_attempts: int, fix_cap: int = 2,
+                 ci_required: bool = True) -> Phase:
     if not pr_open:
         return Phase.IMPLEMENT
+    if not ci_required:
+        return Phase.AWAITING_MERGE if max_is_reviewer else Phase.HANDOFF
     if ci_status in _CI_PENDING:
         return Phase.CI_WAIT
     if ci_status in _CI_FAILED:

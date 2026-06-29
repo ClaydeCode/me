@@ -238,7 +238,11 @@ def is_reviewer_assigned(g: Github, owner: str, repo: str, pr_number: int, login
     return any(r.user and r.user.login.lower() == login.lower() for r in pr.get_reviews())
 
 
-def count_fix_commits(g: Github, owner: str, repo: str, branch: str) -> int:
-    """Return number of commits on branch whose message starts with 'fix(ci):'."""
-    commits = _get_repo(g, owner, repo).get_commits(sha=branch)
+def count_fix_commits(g: Github, owner: str, repo: str, branch: str, default_branch: str) -> int:
+    """Return number of commits unique to branch whose message starts with 'fix(ci):'.
+
+    Uses the compare API so only branch-unique commits are counted — base-branch
+    history containing 'fix(ci):' commits cannot inflate fix_attempts.
+    """
+    commits = _get_repo(g, owner, repo).compare(default_branch, branch).commits
     return sum(1 for c in commits if c.commit.message.startswith("fix(ci):"))

@@ -122,9 +122,18 @@ def run_handoff(g, owner: str, repo: str, number: int, pr_number: int, reviewer:
 
 
 def run_manual_verify(g, owner: str, repo: str, number: int, pr_number: int, reviewer: str) -> None:
-    """Add manual-verify label, assign reviewer, post comment, remove worktree."""
+    """Add manual-verify label, assign reviewer, post comment, remove worktree.
+
+    Idempotent: if the label is already present the function returns immediately
+    so repeated calls on sticky MANUAL_VERIFY ticks do not spam comments or
+    re-assign the reviewer.
+    """
     repo_obj = g.get_repo(f"{owner}/{repo}")
-    repo_obj.get_issue(number).add_to_labels("manual-verify-required")
+    issue_obj = repo_obj.get_issue(number)
+    existing_labels = {lbl.name for lbl in issue_obj.get_labels()}
+    if "manual-verify-required" in existing_labels:
+        return
+    issue_obj.add_to_labels("manual-verify-required")
     add_pr_reviewer(g, owner, repo, pr_number, reviewer)
     post_comment(g, owner, repo, number, "CI still red after auto-fixes — needs your hands")
     remove_worktree(owner, repo, number)

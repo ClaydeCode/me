@@ -201,6 +201,45 @@ def test_mixed_issues_only_valid_counted(mock_assigned, _gdb, _fop, _dp, mock_im
 
 
 # ---------------------------------------------------------------------------
+# Minor A: PR items are skipped silently (no error log, no routing)
+# ---------------------------------------------------------------------------
+
+@patch("clayde.freeshard.loop.get_assigned_issues")
+def test_pr_item_skipped_silently(mock_assigned):
+    pr_item = MagicMock()
+    pr_item.html_url = "https://github.com/FreeshardBase/app-repository/pull/42"
+    mock_assigned.return_value = [pr_item]
+    n = loop.tick(MagicMock(), _settings())
+    assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# Fix #1: none-profile repo with open PR routes to run_handoff, not CI_WAIT
+# ---------------------------------------------------------------------------
+
+@patch("clayde.freeshard.loop.run_handoff")
+@patch("clayde.freeshard.loop.run_implement")
+@patch("clayde.freeshard.loop.is_reviewer_assigned", return_value=False)
+@patch("clayde.freeshard.loop.get_ci_status", return_value="pending")
+@patch("clayde.freeshard.loop.is_blocked", return_value=False)
+@patch("clayde.freeshard.loop.find_open_pr", return_value=APP_PR_URL)
+@patch("clayde.freeshard.loop.get_default_branch", return_value="main")
+@patch("clayde.freeshard.loop.count_fix_commits", return_value=0)
+@patch("clayde.freeshard.loop.get_assigned_issues")
+def test_none_profile_open_pr_routes_to_handoff(
+    mock_assigned, _cfc, _gdb, _fop, _ib, _gci, _ira, mock_impl, mock_handoff,
+):
+    doc_url = "https://github.com/FreeshardBase/documentation/issues/5"
+    mock_assigned.return_value = [_issue(doc_url, number=5)]
+    g = MagicMock()
+    g.get_repo.return_value.get_pull.return_value.head.sha = "abc"
+    n = loop.tick(g, _settings())
+    assert n == 1
+    mock_handoff.assert_called_once()
+    mock_impl.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Resilience: a malformed issue URL must not abort the rest of the tick
 # ---------------------------------------------------------------------------
 

@@ -17,6 +17,7 @@ import time
 
 from clayde.claude import is_claude_available
 from clayde.config import get_github_client, get_settings, setup_logging
+from clayde.disk import check_disk_and_alert
 from clayde.freeshard.loop import tick
 
 log = logging.getLogger("clayde.freeshard.entry")
@@ -56,6 +57,10 @@ def run_loop() -> None:
     log.info("Starting Freeshard loop (interval=%ds)", settings.fs_loop_interval_s)
 
     while not _shutdown:
+        try:
+            check_disk_and_alert(settings)
+        except Exception:
+            log.warning("Disk guard check failed — continuing")
         try:
             if is_claude_available():
                 g = get_github_client()

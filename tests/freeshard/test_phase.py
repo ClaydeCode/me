@@ -41,3 +41,27 @@ def test_no_pr_dominates_regardless_of_other_inputs():
 @pytest.mark.parametrize("ci", ["neutral", "skipped"])
 def test_success_variants_handoff_without_reviewer(ci):
     assert derive_phase(pr_open=True, ci_status=ci, max_is_reviewer=False, fix_attempts=0) == Phase.HANDOFF
+
+# ---------------------------------------------------------------------------
+# Fix #1: ci_required=False skips all CI states and goes straight to handoff
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("ci", [None, "pending", "failure", "success", "bogus"])
+def test_no_ci_required_pr_open_no_reviewer_means_handoff(ci):
+    assert derive_phase(
+        pr_open=True, ci_status=ci, max_is_reviewer=False, fix_attempts=0,
+        ci_required=False,
+    ) == Phase.HANDOFF
+
+@pytest.mark.parametrize("ci", [None, "pending", "failure", "success"])
+def test_no_ci_required_pr_open_with_reviewer_means_awaiting_merge(ci):
+    assert derive_phase(
+        pr_open=True, ci_status=ci, max_is_reviewer=True, fix_attempts=0,
+        ci_required=False,
+    ) == Phase.AWAITING_MERGE
+
+def test_no_ci_required_no_pr_still_implement():
+    assert derive_phase(
+        pr_open=False, ci_status=None, max_is_reviewer=False, fix_attempts=0,
+        ci_required=False,
+    ) == Phase.IMPLEMENT
