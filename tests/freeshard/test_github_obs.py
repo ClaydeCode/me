@@ -7,6 +7,7 @@ def test_get_ci_status_maps_combined_state():
     g = MagicMock()
     commit = g.get_repo.return_value.get_commit.return_value
     commit.get_combined_status.return_value.state = "success"
+    commit.get_combined_status.return_value.total_count = 1
     commit.get_check_runs.return_value = []
     assert get_ci_status(g, "o", "r", "abc") == "success"
 
@@ -42,6 +43,7 @@ def test_get_ci_status_failure_dominates_success():
     g = MagicMock()
     commit = g.get_repo.return_value.get_commit.return_value
     commit.get_combined_status.return_value.state = "success"
+    commit.get_combined_status.return_value.total_count = 1
     run = MagicMock()
     run.status = "completed"
     run.conclusion = "failure"
@@ -54,6 +56,7 @@ def test_get_ci_status_error_normalized_to_failure():
     g = MagicMock()
     commit = g.get_repo.return_value.get_commit.return_value
     commit.get_combined_status.return_value.state = "error"
+    commit.get_combined_status.return_value.total_count = 1
     commit.get_check_runs.return_value = []
     assert get_ci_status(g, "o", "r", "abc") == "failure"
 
@@ -63,6 +66,7 @@ def test_get_ci_status_pending_when_incomplete_check_run():
     g = MagicMock()
     commit = g.get_repo.return_value.get_commit.return_value
     commit.get_combined_status.return_value.state = "success"
+    commit.get_combined_status.return_value.total_count = 1
     run = MagicMock()
     run.status = "in_progress"
     run.conclusion = None
@@ -94,3 +98,32 @@ def test_is_reviewer_assigned_false_neither_request_nor_review():
     rev.user.login = "another"
     pr.get_reviews.return_value = [rev]
     assert not is_reviewer_assigned(g, "o", "r", 5, "maxtepkasper")
+
+
+def test_get_ci_status_ignores_empty_combined_status():
+    """A repo with zero legacy commit-statuses (total_count=0) reports combined
+    state 'pending' by default; green check-runs must NOT be poisoned to pending."""
+    from unittest.mock import MagicMock
+    from clayde.github import get_ci_status
+    g = MagicMock()
+    commit = g.get_repo.return_value.get_commit.return_value
+    cs = commit.get_combined_status.return_value
+    cs.total_count = 0
+    cs.state = "pending"
+    build = MagicMock(); build.status = "completed"; build.conclusion = "success"
+    deploy = MagicMock(); deploy.status = "completed"; deploy.conclusion = "skipped"
+    commit.get_check_runs.return_value = [build, deploy]
+    assert get_ci_status(g, "o", "r", "sha") == "success"
+
+
+def test_get_ci_status_respects_real_combined_pending():
+    """When commit-statuses DO exist and are pending, still report pending."""
+    from unittest.mock import MagicMock
+    from clayde.github import get_ci_status
+    g = MagicMock()
+    commit = g.get_repo.return_value.get_commit.return_value
+    cs = commit.get_combined_status.return_value
+    cs.total_count = 2
+    cs.state = "pending"
+    commit.get_check_runs.return_value = []
+    assert get_ci_status(g, "o", "r", "sha") == "pending"

@@ -107,3 +107,16 @@ def test_ci_success_at_cap_with_reviewer_still_awaiting_merge():
         pr_open=True, ci_status="success", max_is_reviewer=True,
         fix_attempts=0, attempts=20, attempt_cap=20,
     ) == Phase.AWAITING_MERGE
+
+
+def test_ci_pending_at_cap_still_ci_wait():
+    """attempts cap must NOT override a pending CI — still wait."""
+    assert derive_phase(pr_open=True, ci_status="queued", max_is_reviewer=False,
+                        fix_attempts=0, attempts=20, attempt_cap=20) == Phase.CI_WAIT
+
+
+def test_ci_not_required_at_cap_still_handoff():
+    """attempts cap must NOT override the no-CI early handoff."""
+    assert derive_phase(pr_open=True, ci_status=None, max_is_reviewer=False,
+                        fix_attempts=0, ci_required=False,
+                        attempts=20, attempt_cap=20) == Phase.HANDOFF
