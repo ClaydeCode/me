@@ -40,6 +40,9 @@ def _build_discussion_text(comments) -> str:
 def run_implement(g, owner: str, repo: str, number: int, default_branch: str) -> None:
     """Worktree → render fs_implement.j2 → invoke Claude → local verify → push + open PR (if green)."""
     branch = _branch(number)
+    if find_open_pr(g, owner, repo, branch):
+        log.info("PR already open for %s/%s#%d — nothing to implement", owner, repo, number)
+        return
     worktree = add_worktree(owner, repo, number, default_branch)
 
     issue = fetch_issue(g, owner, repo, number)

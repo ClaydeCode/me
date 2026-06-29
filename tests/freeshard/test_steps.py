@@ -119,6 +119,21 @@ def test_implement_pr_body_no_summary_when_unparseable(
     assert kwargs["body"] == "Closes #7"
 
 
+@patch("clayde.freeshard.steps._push_branch")
+@patch("clayde.freeshard.steps.fetch_issue")
+@patch("clayde.freeshard.steps.fetch_issue_comments", return_value=[])
+@patch("clayde.freeshard.steps.find_open_pr", return_value="https://x/pull/3")
+@patch("clayde.freeshard.steps.create_pull_request")
+@patch("clayde.freeshard.steps.add_worktree")
+@patch("clayde.freeshard.steps.invoke_claude")
+def test_implement_skips_when_pr_already_open(
+    mock_claude, mock_wt, mock_pr, mock_find, mock_fic, mock_fi, mock_push,
+):
+    steps.run_implement(MagicMock(), "o", "r", 7, "main")
+    mock_claude.assert_not_called()
+    mock_pr.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # run_ci_fix
 # ---------------------------------------------------------------------------
