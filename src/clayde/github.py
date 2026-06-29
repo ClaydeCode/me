@@ -251,6 +251,18 @@ def count_fix_commits(g: Github, owner: str, repo: str, branch: str, default_bra
     return sum(1 for c in commits if c.commit.message.startswith("fix(ci):"))
 
 
+def count_branch_commits(g: Github, owner: str, repo: str, branch: str, default_branch: str) -> int:
+    """Return total number of commits unique to branch vs default_branch.
+
+    Uses the compare API so only branch-unique commits are counted. Returns 0
+    on GithubException (branch missing, branch equal to base, etc.).
+    """
+    try:
+        return len(_get_repo(g, owner, repo).compare(default_branch, branch).commits)
+    except GithubException:
+        return 0
+
+
 def has_ci_workflows(g: Github, owner: str, repo: str) -> bool:
     """Return True if the repo has any file under .github/workflows/.
 

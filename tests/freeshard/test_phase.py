@@ -65,3 +65,45 @@ def test_no_ci_required_no_pr_still_implement():
         pr_open=False, ci_status=None, max_is_reviewer=False, fix_attempts=0,
         ci_required=False,
     ) == Phase.IMPLEMENT
+
+
+# ---------------------------------------------------------------------------
+# Attempt cap: ESCALATE when branch-commit count hits the cap
+# ---------------------------------------------------------------------------
+
+def test_no_pr_attempts_at_cap_means_escalate():
+    assert derive_phase(
+        pr_open=False, ci_status=None, max_is_reviewer=False, fix_attempts=0,
+        attempts=20, attempt_cap=20,
+    ) == Phase.ESCALATE
+
+
+def test_no_pr_attempts_below_cap_means_implement():
+    assert derive_phase(
+        pr_open=False, ci_status=None, max_is_reviewer=False, fix_attempts=0,
+        attempts=19, attempt_cap=20,
+    ) == Phase.IMPLEMENT
+
+
+def test_pr_ci_failed_attempts_at_cap_means_manual_verify():
+    """Backstop: attempt cap overrides fix_cap for CI_FIX → MANUAL_VERIFY."""
+    assert derive_phase(
+        pr_open=True, ci_status="failure", max_is_reviewer=False,
+        fix_attempts=0, fix_cap=2,
+        attempts=20, attempt_cap=20,
+    ) == Phase.MANUAL_VERIFY
+
+
+def test_ci_success_at_cap_still_handoff():
+    """Cap must not override terminal/waiting phases — CI green → HANDOFF regardless."""
+    assert derive_phase(
+        pr_open=True, ci_status="success", max_is_reviewer=False,
+        fix_attempts=0, attempts=20, attempt_cap=20,
+    ) == Phase.HANDOFF
+
+
+def test_ci_success_at_cap_with_reviewer_still_awaiting_merge():
+    assert derive_phase(
+        pr_open=True, ci_status="success", max_is_reviewer=True,
+        fix_attempts=0, attempts=20, attempt_cap=20,
+    ) == Phase.AWAITING_MERGE

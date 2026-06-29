@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     fs_reviewer: str = "max-tet"
     fs_parallelism: int = 1
     fs_loop_interval_s: int = 120
+    fs_max_branch_commits: int = 20
 
     # Pebble webhook
     pebble_enabled: bool = False
