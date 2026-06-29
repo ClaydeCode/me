@@ -1,11 +1,14 @@
 """Stateless phase derivation for the Freeshard execution loop.
 
 Phase is a pure function of GitHub-observable facts — no local store.
+Unknown CI statuses are treated as pending (CI_WAIT), never as green — a safe stall
+that re-checks next cycle and never hands off prematurely.
 """
 from enum import StrEnum
 
 _CI_PENDING = {None, "pending", "queued", "in_progress", "waiting", "requested"}
 _CI_FAILED = {"failure", "error", "cancelled", "timed_out", "action_required", "stale"}
+_CI_SUCCESS = {"success", "neutral", "skipped"}
 
 
 class Phase(StrEnum):
@@ -25,5 +28,8 @@ def derive_phase(*, pr_open: bool, ci_status: str | None,
         return Phase.CI_WAIT
     if ci_status in _CI_FAILED:
         return Phase.MANUAL_VERIFY if fix_attempts >= fix_cap else Phase.CI_FIX
-    # any other value ("success") → green
-    return Phase.AWAITING_MERGE if max_is_reviewer else Phase.HANDOFF
+    if ci_status in _CI_SUCCESS:
+        return Phase.AWAITING_MERGE if max_is_reviewer else Phase.HANDOFF
+    # Unrecognized status: never assume green. Treat as still pending — a
+    # safe stall that re-checks next cycle and never hands off prematurely.
+    return Phase.CI_WAIT
