@@ -64,7 +64,7 @@ def run_implement(g, owner: str, repo: str, number: int, default_branch: str) ->
     result = invoke_claude(prompt, str(worktree), branch_name=branch, conversation_path=None)
 
     profile = verify_profile(repo)
-    ok, log_tail = local_verify(profile, worktree)
+    ok, log_tail = local_verify(profile, worktree, repo=repo)
 
     if not ok:
         log.warning(
