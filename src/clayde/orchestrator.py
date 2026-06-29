@@ -7,6 +7,7 @@ import signal
 import uvicorn
 
 from clayde.config import get_settings, setup_logging
+from clayde.freeshard.loop import run_cycle
 from clayde.webhook import JobQueue, create_app, worker_loop
 
 log = logging.getLogger("clayde.orchestrator")
@@ -18,6 +19,19 @@ def _handle_signal(signum, frame):
     global _shutdown
     _shutdown = True
     log.info("Received signal %s — will shut down", signum)
+
+
+async def _freeshard_loop(settings) -> None:
+    """Freeshard cycle loop — runs beside the Pebble webhook, non-blocking."""
+    while not _shutdown:
+        try:
+            await asyncio.to_thread(run_cycle, settings)
+        except Exception:
+            log.exception("Freeshard cycle failed — continuing")
+        for _ in range(settings.fs_loop_interval_s):
+            if _shutdown:
+                break
+            await asyncio.sleep(1)
 
 
 async def _run_with_pebble() -> None:
@@ -44,7 +58,7 @@ async def _run_with_pebble() -> None:
             kb_path=settings.kb_path,
         )
 
-    await asyncio.gather(server.serve(), worker_task())
+    await asyncio.gather(server.serve(), worker_task(), _freeshard_loop(settings))
 
 
 def run_loop():

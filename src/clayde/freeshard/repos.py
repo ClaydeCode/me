@@ -6,9 +6,6 @@ CORE_REPOS = frozenset({"freeshard", "freeshard-controller"})
 # populated when a non-core repo is found to need a live shard (Group B).
 _NEEDS_SHARD = frozenset()
 
-# Repos with no test suite — CI-green is the only gate (e.g. docs).
-_NO_TESTS = frozenset({"documentation"})
-
 
 def is_non_core(repo: str) -> bool:
     return repo not in CORE_REPOS
@@ -17,6 +14,4 @@ def is_non_core(repo: str) -> bool:
 def verify_profile(repo: str) -> str:
     if repo in _NEEDS_SHARD:
         return "needs-shard"
-    if repo in _NO_TESTS:
-        return "none"
     return "tests-only"

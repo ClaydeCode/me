@@ -13,7 +13,3 @@ def test_non_core_repos_included():
 
 def test_profile_defaults_to_tests_only():
     assert verify_profile("app-repository") == "tests-only"
-
-
-def test_documentation_has_no_tests():
-    assert verify_profile("documentation") == "none"

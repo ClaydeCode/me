@@ -8,9 +8,6 @@ from clayde.freeshard import entry
 
 def _mock_settings(interval: int = 1) -> MagicMock:
     s = MagicMock()
-    s.github_token = "token"
-    s.effective_git_name = "ClaydeCode"
-    s.git_email = "clayde@example.com"
     s.fs_loop_interval_s = interval
     return s
 
@@ -22,69 +19,57 @@ def reset_shutdown():
     entry._shutdown = False
 
 
-def test_run_loop_calls_tick_then_stops():
-    """tick() is called once; loop exits when tick sets _shutdown."""
+def test_run_loop_calls_run_cycle_then_stops():
+    """run_cycle() is called once; loop exits when it sets _shutdown."""
 
-    def tick_side_effect(g, settings):
+    def cycle_side_effect(settings):
         entry._shutdown = True
         return 1
 
     with (
         patch("clayde.freeshard.entry.setup_logging"),
         patch("clayde.freeshard.entry.get_settings", return_value=_mock_settings()),
-        patch("clayde.freeshard.entry.subprocess.run"),
-        patch("clayde.freeshard.entry.is_claude_available", return_value=True),
-        patch("clayde.freeshard.entry.get_github_client", return_value=MagicMock()),
-        patch("clayde.freeshard.entry.tick", side_effect=tick_side_effect) as mock_tick,
+        patch("clayde.freeshard.entry.run_cycle", side_effect=cycle_side_effect) as mock_cycle,
         patch("time.sleep"),
     ):
         entry.run_loop()
 
-    mock_tick.assert_called_once()
+    mock_cycle.assert_called_once()
 
 
-def test_run_loop_skips_tick_when_claude_unavailable():
-    """tick() is never called when Claude is unavailable; loop exits on first sleep."""
-
-    def sleep_side_effect(_duration):
-        entry._shutdown = True
-
-    with (
-        patch("clayde.freeshard.entry.setup_logging"),
-        patch("clayde.freeshard.entry.get_settings", return_value=_mock_settings(interval=1)),
-        patch("clayde.freeshard.entry.subprocess.run"),
-        patch("clayde.freeshard.entry.is_claude_available", return_value=False),
-        patch("clayde.freeshard.entry.tick") as mock_tick,
-        patch("time.sleep", side_effect=sleep_side_effect),
-    ):
-        entry.run_loop()
-
-    mock_tick.assert_not_called()
-
-
-def test_run_loop_continues_after_tick_exception():
-    """Loop survives bad tick — exception caught, loop continues, next tick runs."""
-
-    call_count = 0
-
-    def tick_side_effect(g, settings):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise RuntimeError("boom")
-        else:
-            entry._shutdown = True
-            return 0
+def test_run_loop_skips_cycle_when_shutdown_pre_set():
+    """If _shutdown is True before run_cycle, loop exits without calling it."""
+    entry._shutdown = True
 
     with (
         patch("clayde.freeshard.entry.setup_logging"),
         patch("clayde.freeshard.entry.get_settings", return_value=_mock_settings()),
-        patch("clayde.freeshard.entry.subprocess.run"),
-        patch("clayde.freeshard.entry.is_claude_available", return_value=True),
-        patch("clayde.freeshard.entry.get_github_client", return_value=MagicMock()),
-        patch("clayde.freeshard.entry.tick", side_effect=tick_side_effect) as mock_tick,
+        patch("clayde.freeshard.entry.run_cycle") as mock_cycle,
+    ):
+        entry.run_loop()
+
+    mock_cycle.assert_not_called()
+
+
+def test_run_loop_continues_after_cycle_exception():
+    """Loop survives bad cycle — exception caught, loop continues, next cycle runs."""
+
+    call_count = 0
+
+    def cycle_side_effect(settings):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("boom")
+        entry._shutdown = True
+        return 0
+
+    with (
+        patch("clayde.freeshard.entry.setup_logging"),
+        patch("clayde.freeshard.entry.get_settings", return_value=_mock_settings()),
+        patch("clayde.freeshard.entry.run_cycle", side_effect=cycle_side_effect) as mock_cycle,
         patch("time.sleep"),
     ):
         entry.run_loop()
 
-    assert mock_tick.call_count == 2
+    assert mock_cycle.call_count == 2

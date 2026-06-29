@@ -7,8 +7,11 @@ matching handler. No local state — all phase input comes from GitHub.
 import concurrent.futures
 import logging
 
+from clayde.claude import is_claude_available
+from clayde.config import get_github_client
+from clayde.disk import check_disk_and_alert
 from clayde.freeshard.phase import Phase, derive_phase
-from clayde.freeshard.repos import is_non_core, verify_profile
+from clayde.freeshard.repos import is_non_core
 from clayde.freeshard.steps import (
     run_ci_fix,
     run_handoff,
@@ -21,6 +24,7 @@ from clayde.github import (
     get_assigned_issues,
     get_ci_status,
     get_default_branch,
+    has_ci_workflows,
     is_blocked,
     is_pull_request_item,
     is_reviewer_assigned,
@@ -112,7 +116,14 @@ def _process_issue(g, settings, issue) -> bool:
             is_rev = is_reviewer_assigned(g, owner, repo, pr_number, settings.fs_reviewer)
             fix_attempts = count_fix_commits(g, owner, repo, branch, default_branch)
 
-        ci_required = verify_profile(repo) != "none"
+        try:
+            ci_required = has_ci_workflows(g, owner, repo)
+        except Exception:
+            log.warning(
+                "Could not determine CI workflows for %s/%s — defaulting ci_required=True",
+                owner, repo,
+            )
+            ci_required = True
         phase = derive_phase(
             pr_open=pr_open,
             ci_status=ci,
@@ -148,3 +159,16 @@ def tick(g, settings) -> int:
             except Exception as exc:  # noqa: BLE001
                 log.exception("Unexpected error collecting future result: %s", exc)
     return processed
+
+
+def run_cycle(settings) -> int:
+    """One Freeshard cycle: disk guard + tick. Returns issue count, or -1 if Claude unavailable."""
+    try:
+        check_disk_and_alert(settings)
+    except Exception:
+        log.warning("Disk guard check failed — continuing")
+    if is_claude_available():
+        g = get_github_client()
+        return tick(g, settings)
+    log.info("usage limit — skipping")
+    return -1

@@ -214,11 +214,12 @@ def test_pr_item_skipped_silently(mock_assigned):
 
 
 # ---------------------------------------------------------------------------
-# Fix #1: none-profile repo with open PR routes to run_handoff, not CI_WAIT
+# Change 2: ci_required derived from has_ci_workflows
 # ---------------------------------------------------------------------------
 
 @patch("clayde.freeshard.loop.run_handoff")
 @patch("clayde.freeshard.loop.run_implement")
+@patch("clayde.freeshard.loop.has_ci_workflows", return_value=False)
 @patch("clayde.freeshard.loop.is_reviewer_assigned", return_value=False)
 @patch("clayde.freeshard.loop.get_ci_status", return_value="pending")
 @patch("clayde.freeshard.loop.is_blocked", return_value=False)
@@ -226,16 +227,41 @@ def test_pr_item_skipped_silently(mock_assigned):
 @patch("clayde.freeshard.loop.get_default_branch", return_value="main")
 @patch("clayde.freeshard.loop.count_fix_commits", return_value=0)
 @patch("clayde.freeshard.loop.get_assigned_issues")
-def test_none_profile_open_pr_routes_to_handoff(
-    mock_assigned, _cfc, _gdb, _fop, _ib, _gci, _ira, mock_impl, mock_handoff,
+def test_no_ci_workflows_open_pr_routes_to_handoff(
+    mock_assigned, _cfc, _gdb, _fop, _ib, _gci, _ira, _hwf, mock_impl, mock_handoff,
 ):
-    doc_url = "https://github.com/FreeshardBase/documentation/issues/5"
-    mock_assigned.return_value = [_issue(doc_url, number=5)]
+    """Repo without CI workflows → ci_required=False → HANDOFF even with pending CI."""
+    mock_assigned.return_value = [_issue(APP_ISSUE_URL, number=7)]
     g = MagicMock()
     g.get_repo.return_value.get_pull.return_value.head.sha = "abc"
     n = loop.tick(g, _settings())
     assert n == 1
     mock_handoff.assert_called_once()
+    mock_impl.assert_not_called()
+
+
+@patch("clayde.freeshard.loop.has_ci_workflows", return_value=True)
+@patch("clayde.freeshard.loop.is_reviewer_assigned", return_value=False)
+@patch("clayde.freeshard.loop.get_ci_status", return_value="pending")
+@patch("clayde.freeshard.loop.is_blocked", return_value=False)
+@patch("clayde.freeshard.loop.find_open_pr", return_value=APP_PR_URL)
+@patch("clayde.freeshard.loop.get_default_branch", return_value="main")
+@patch("clayde.freeshard.loop.count_fix_commits", return_value=0)
+@patch("clayde.freeshard.loop.get_assigned_issues")
+def test_has_ci_workflows_pending_ci_is_ci_wait(
+    mock_assigned, _cfc, _gdb, _fop, _ib, _gci, _ira, _hwf,
+):
+    """Repo with CI workflows + pending CI → CI_WAIT (no handler called)."""
+    mock_assigned.return_value = [_issue(APP_ISSUE_URL, number=7)]
+    g = MagicMock()
+    g.get_repo.return_value.get_pull.return_value.head.sha = "abc"
+    with (
+        patch("clayde.freeshard.loop.run_handoff") as mock_handoff,
+        patch("clayde.freeshard.loop.run_implement") as mock_impl,
+    ):
+        n = loop.tick(g, _settings())
+    assert n == 1
+    mock_handoff.assert_not_called()
     mock_impl.assert_not_called()
 
 

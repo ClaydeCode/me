@@ -19,6 +19,7 @@ from clayde.github import (
     get_issue_author,
     get_pr_review_comments,
     get_pr_reviews,
+    has_ci_workflows,
     is_blocked,
     is_pull_request_item,
     parse_issue_url,
@@ -290,3 +291,21 @@ class TestGetPull:
         g.get_repo.assert_called_once_with("owner/repo")
         mock_repo.get_pull.assert_called_once_with(42)
         assert result is mock_pr
+
+
+class TestHasCiWorkflows:
+    def test_returns_true_when_workflows_present(self):
+        g = MagicMock()
+        g.get_repo.return_value.get_contents.return_value = [MagicMock()]
+        assert has_ci_workflows(g, "alice", "repo") is True
+        g.get_repo.return_value.get_contents.assert_called_once_with(".github/workflows")
+
+    def test_returns_false_on_404(self):
+        g = MagicMock()
+        g.get_repo.return_value.get_contents.side_effect = GithubException(404, "Not Found", None)
+        assert has_ci_workflows(g, "alice", "repo") is False
+
+    def test_returns_false_on_empty_list(self):
+        g = MagicMock()
+        g.get_repo.return_value.get_contents.return_value = []
+        assert has_ci_workflows(g, "alice", "repo") is False
