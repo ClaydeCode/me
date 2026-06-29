@@ -1,5 +1,6 @@
 """Direct tests for verify.py — profile dispatch, runner discovery, shard lifecycle."""
 from pathlib import Path
+from subprocess import CalledProcessError
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -25,6 +26,17 @@ def test_none_profile_returns_ok_no_subprocess(tmp_path):
 
 def test_tests_only_justfile_runs_just_test(tmp_path):
     (tmp_path / "justfile").write_text("test:\n    echo ok\n")
+    proc = MagicMock(returncode=0, stdout="passed\n", stderr="")
+    with patch("clayde.freeshard.verify.subprocess.run", return_value=proc) as mock_run:
+        ok, tail = local_verify("tests-only", tmp_path)
+    assert ok is True
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert cmd == ["just", "test"]
+
+
+def test_tests_only_capital_justfile_runs_just_test(tmp_path):
+    (tmp_path / "Justfile").write_text("test:\n    echo ok\n")
     proc = MagicMock(returncode=0, stdout="passed\n", stderr="")
     with patch("clayde.freeshard.verify.subprocess.run", return_value=proc) as mock_run:
         ok, tail = local_verify("tests-only", tmp_path)
@@ -167,6 +179,26 @@ def test_shard_down_runs_even_when_command_raises(tmp_path):
             _verify_with_shard(tmp_path, compose_file, command)
 
     assert down_called, "docker compose down must run even when command raises"
+
+
+def test_shard_down_runs_even_when_up_fails(tmp_path):
+    compose_file = "/path/to/docker-compose.yml"
+    command = ["pytest"]
+    down_called = []
+
+    def fake_run(cmd, **kwargs):
+        if "up" in cmd:
+            raise CalledProcessError(1, cmd)
+        if "down" in cmd:
+            down_called.append(True)
+            return _make_proc()
+        return _make_proc()
+
+    with patch("clayde.freeshard.verify.subprocess.run", side_effect=fake_run):
+        with pytest.raises(CalledProcessError):
+            _verify_with_shard(tmp_path, compose_file, command)
+
+    assert down_called, "docker compose down must run even when up fails"
 
 
 def test_shard_compose_file_passed_to_up_and_down(tmp_path):

@@ -50,12 +50,12 @@ def _verify_with_shard(
     command: list[str],
 ) -> tuple[bool, str]:
     """Bring up shard, run command, always tear down. Returns (ok, log_tail)."""
-    subprocess.run(
-        ["docker", "compose", "-f", compose_file, "up", "-d"],
-        check=True,
-        capture_output=True,
-    )
     try:
+        subprocess.run(
+            ["docker", "compose", "-f", compose_file, "up", "-d"],
+            check=True,
+            capture_output=True,
+        )
         result = subprocess.run(
             command, cwd=str(worktree), text=True, capture_output=True,
         )
