@@ -52,7 +52,6 @@ def _route(
     repo: str,
     number: int,
     default_branch: str,
-    pr_url: str | None,
     pr_number: int | None,
     head: str | None,
     phase: Phase,
@@ -80,14 +79,14 @@ def tick(g, settings) -> int:
     """Process one pass over assigned issues. Returns count of routed issues."""
     processed = 0
     for issue in get_assigned_issues(g):
-        owner, repo, number = parse_issue_url(issue.html_url)
-        ref = f"{owner}/{repo}#{number}"
-
-        if not is_non_core(repo):
-            log.info("Skipping core repo %s (Phase 3)", ref)
-            continue
-
         try:
+            owner, repo, number = parse_issue_url(issue.html_url)
+            ref = f"{owner}/{repo}#{number}"
+
+            if not is_non_core(repo):
+                log.info("Skipping core repo %s (Phase 3)", ref)
+                continue
+
             if is_blocked(g, owner, repo, number):
                 log.info("%s is blocked — skipping", ref)
                 continue
@@ -118,10 +117,10 @@ def tick(g, settings) -> int:
             )
             log.info("%s — phase=%s", ref, phase)
 
-            _route(g, owner, repo, number, default_branch, pr_url, pr_number, head, phase, settings)
+            _route(g, owner, repo, number, default_branch, pr_number, head, phase, settings)
             processed += 1
 
         except Exception as exc:  # noqa: BLE001
-            log.exception("Error processing %s: %s", ref, exc)
+            log.exception("Error processing %s: %s", issue.html_url, exc)
 
     return processed
