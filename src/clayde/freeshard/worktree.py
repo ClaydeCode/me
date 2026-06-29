@@ -22,17 +22,20 @@ def add_worktree(owner: str, repo: str, number: int, default_branch: str) -> Pat
     branch = _branch(number)
 
     if (wt / ".git").exists():
-        # reuse existing worktree, pull any remote progress
+        # reuse existing worktree, fetch the branch ref without merging to preserve local work
         subprocess.run(["git", "fetch", "origin", branch], cwd=str(wt),
                        capture_output=True, text=True)
         subprocess.run(["git", "checkout", branch], cwd=str(wt), capture_output=True, text=True)
         return wt
 
     # create worktree on a new or existing branch
-    remote_has = subprocess.run(
+    ls = subprocess.run(
         ["git", "ls-remote", "--heads", "origin", branch],
         cwd=str(base), capture_output=True, text=True,
-    ).stdout.strip()
+    )
+    if ls.returncode != 0:
+        raise RuntimeError(f"ls-remote failed for {branch}: {ls.stderr}")
+    remote_has = ls.stdout.strip()
     if remote_has:
         args = ["git", "worktree", "add", "-B", branch, str(wt), f"origin/{branch}"]
     else:
