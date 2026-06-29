@@ -193,3 +193,52 @@ def get_pr_title(g: Github, owner: str, repo: str, pr_number: int) -> str:
 def get_pull(g: Github, owner: str, repo: str, pr_number: int):
     """Return the PullRequest object for the given PR number."""
     return _get_repo(g, owner, repo).get_pull(pr_number)
+
+
+# ---------------------------------------------------------------------------
+# Freeshard loop observation helpers
+# ---------------------------------------------------------------------------
+
+def get_ci_status(g: Github, owner: str, repo: str, ref: str) -> str | None:
+    """Combined CI conclusion for a ref: success/failure/pending, or None if no checks.
+
+    Merges the legacy commit-status API and check-runs: failure dominates,
+    then pending, else success. None means nothing has reported yet.
+    """
+    commit = _get_repo(g, owner, repo).get_commit(ref)
+    states: list[str] = []
+
+    combined = commit.get_combined_status().state  # success|failure|pending|error
+    if combined and combined != "pending":
+        states.append("failure" if combined in ("failure", "error") else "success")
+    elif combined == "pending":
+        states.append("pending")
+
+    for run in commit.get_check_runs():
+        if run.status != "completed":
+            states.append("pending")
+        else:
+            states.append(run.conclusion or "failure")
+
+    if not states:
+        return None
+    if any(s in ("failure", "error", "cancelled", "timed_out", "action_required") for s in states):
+        return "failure"
+    if any(s in ("pending", "queued", "in_progress") for s in states):
+        return "pending"
+    return "success"
+
+
+def is_reviewer_assigned(g: Github, owner: str, repo: str, pr_number: int, login: str) -> bool:
+    """Return True if login has been requested as reviewer or has submitted a review."""
+    pr = _get_repo(g, owner, repo).get_pull(pr_number)
+    requested_users, _ = pr.get_review_requests()
+    if any(u.login.lower() == login.lower() for u in requested_users):
+        return True
+    return any(r.user and r.user.login.lower() == login.lower() for r in pr.get_reviews())
+
+
+def count_fix_commits(g: Github, owner: str, repo: str, branch: str) -> int:
+    """Return number of commits on branch whose message starts with 'fix(ci):'."""
+    commits = _get_repo(g, owner, repo).get_commits(sha=branch)
+    return sum(1 for c in commits if c.commit.message.startswith("fix(ci):"))
