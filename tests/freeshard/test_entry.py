@@ -32,7 +32,7 @@ def test_run_loop_calls_tick_then_stops():
     with (
         patch("clayde.freeshard.entry.setup_logging"),
         patch("clayde.freeshard.entry.get_settings", return_value=_mock_settings()),
-        patch("subprocess.run"),
+        patch("clayde.freeshard.entry.subprocess.run"),
         patch("clayde.freeshard.entry.is_claude_available", return_value=True),
         patch("clayde.freeshard.entry.get_github_client", return_value=MagicMock()),
         patch("clayde.freeshard.entry.tick", side_effect=tick_side_effect) as mock_tick,
@@ -52,7 +52,7 @@ def test_run_loop_skips_tick_when_claude_unavailable():
     with (
         patch("clayde.freeshard.entry.setup_logging"),
         patch("clayde.freeshard.entry.get_settings", return_value=_mock_settings(interval=1)),
-        patch("subprocess.run"),
+        patch("clayde.freeshard.entry.subprocess.run"),
         patch("clayde.freeshard.entry.is_claude_available", return_value=False),
         patch("clayde.freeshard.entry.tick") as mock_tick,
         patch("time.sleep", side_effect=sleep_side_effect),
@@ -60,3 +60,31 @@ def test_run_loop_skips_tick_when_claude_unavailable():
         entry.run_loop()
 
     mock_tick.assert_not_called()
+
+
+def test_run_loop_continues_after_tick_exception():
+    """Loop survives bad tick — exception caught, loop continues, next tick runs."""
+
+    call_count = 0
+
+    def tick_side_effect(g, settings):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("boom")
+        else:
+            entry._shutdown = True
+            return 0
+
+    with (
+        patch("clayde.freeshard.entry.setup_logging"),
+        patch("clayde.freeshard.entry.get_settings", return_value=_mock_settings()),
+        patch("clayde.freeshard.entry.subprocess.run"),
+        patch("clayde.freeshard.entry.is_claude_available", return_value=True),
+        patch("clayde.freeshard.entry.get_github_client", return_value=MagicMock()),
+        patch("clayde.freeshard.entry.tick", side_effect=tick_side_effect) as mock_tick,
+        patch("time.sleep"),
+    ):
+        entry.run_loop()
+
+    assert mock_tick.call_count == 2
