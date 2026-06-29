@@ -58,7 +58,7 @@ def test_implement_no_pr_when_verify_red(
     mock_wt.return_value = Path("/tmp/wt")
     steps.run_implement(MagicMock(), "o", "r", 7, "main")
     mock_pr.assert_not_called()
-    mock_push.assert_not_called()
+    mock_push.assert_called_once()
 
 
 @patch("clayde.freeshard.steps.local_verify", return_value=(True, ""))
@@ -248,3 +248,44 @@ def test_manual_verify_is_idempotent(mock_apr, mock_pc, mock_rw):
     mock_pc.assert_not_called()
     mock_apr.assert_not_called()
     issue_obj.add_to_labels.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# run_escalate
+# ---------------------------------------------------------------------------
+
+@patch("clayde.freeshard.steps.remove_worktree")
+@patch("clayde.freeshard.steps.post_comment")
+def test_escalate_adds_label_assignee_comment_removes_worktree(mock_pc, mock_rw):
+    g = MagicMock()
+    issue_obj = MagicMock()
+    issue_obj.get_labels.return_value = []
+    g.get_repo.return_value.get_issue.return_value = issue_obj
+
+    steps.run_escalate(g, "o", "r", 7, "reviewer")
+
+    issue_obj.add_to_labels.assert_called_once_with("manual-verify-required")
+    issue_obj.add_to_assignees.assert_called_once_with("reviewer")
+    mock_pc.assert_called_once()
+    comment_body = mock_pc.call_args[0][4]
+    assert "needs your hands" in comment_body
+    mock_rw.assert_called_once()
+
+
+@patch("clayde.freeshard.steps.remove_worktree")
+@patch("clayde.freeshard.steps.post_comment")
+def test_escalate_is_idempotent(mock_pc, mock_rw):
+    """Second call when label already present must be a no-op."""
+    g = MagicMock()
+    existing_label = MagicMock()
+    existing_label.name = "manual-verify-required"
+    issue_obj = MagicMock()
+    issue_obj.get_labels.return_value = [existing_label]
+    g.get_repo.return_value.get_issue.return_value = issue_obj
+
+    steps.run_escalate(g, "o", "r", 7, "reviewer")
+
+    issue_obj.add_to_labels.assert_not_called()
+    issue_obj.add_to_assignees.assert_not_called()
+    mock_pc.assert_not_called()
+    mock_rw.assert_not_called()

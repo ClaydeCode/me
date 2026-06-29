@@ -8,6 +8,7 @@ from github import GithubException
 from clayde.github import (
     _has_open_parent_issue,
     add_pr_reviewer,
+    count_branch_commits,
     create_pull_request,
     edit_comment,
     fetch_comment,
@@ -291,6 +292,22 @@ class TestGetPull:
         g.get_repo.assert_called_once_with("owner/repo")
         mock_repo.get_pull.assert_called_once_with(42)
         assert result is mock_pr
+
+
+class TestCountBranchCommits:
+    def test_returns_commit_count(self):
+        g = MagicMock()
+        mock_commits = [MagicMock(), MagicMock(), MagicMock()]
+        g.get_repo.return_value.compare.return_value.commits = mock_commits
+        result = count_branch_commits(g, "alice", "repo", "clayde/issue-5", "main")
+        g.get_repo.return_value.compare.assert_called_once_with("main", "clayde/issue-5")
+        assert result == 3
+
+    def test_returns_zero_on_github_exception(self):
+        g = MagicMock()
+        g.get_repo.return_value.compare.side_effect = GithubException(404, "Not Found", None)
+        result = count_branch_commits(g, "alice", "repo", "clayde/issue-5", "main")
+        assert result == 0
 
 
 class TestHasCiWorkflows:

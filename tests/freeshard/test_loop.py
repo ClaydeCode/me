@@ -21,6 +21,7 @@ def _issue(url, number=7):
 def _settings(reviewer="max"):
     s = MagicMock()
     s.fs_reviewer = reviewer
+    s.fs_max_branch_commits = 20
     return s
 
 
@@ -76,8 +77,10 @@ def _patched_tick(phase, *, pr_url=None):
         "clayde.freeshard.loop.get_ci_status": MagicMock(return_value="failure"),
         "clayde.freeshard.loop.is_reviewer_assigned": MagicMock(return_value=False),
         "clayde.freeshard.loop.count_fix_commits": MagicMock(return_value=0),
+        "clayde.freeshard.loop.count_branch_commits": MagicMock(return_value=0),
         "clayde.freeshard.loop.derive_phase": MagicMock(return_value=phase),
         "clayde.freeshard.loop.run_implement": MagicMock(),
+        "clayde.freeshard.loop.run_escalate": MagicMock(),
         "clayde.freeshard.loop.run_ci_fix": MagicMock(),
         "clayde.freeshard.loop.run_handoff": MagicMock(),
         "clayde.freeshard.loop.run_manual_verify": MagicMock(),
@@ -104,6 +107,24 @@ def test_phase_routes_to_correct_handler(phase, handler_key, pr_url, call_args):
     n, patches, g = _patched_tick(phase, pr_url=pr_url)
     assert n == 1
     patches[handler_key].assert_called_once_with(g, *call_args)
+
+
+@patch("clayde.freeshard.loop.run_escalate")
+@patch("clayde.freeshard.loop.count_branch_commits", return_value=20)
+@patch("clayde.freeshard.loop.derive_phase", return_value=Phase.ESCALATE)
+@patch("clayde.freeshard.loop.is_blocked", return_value=False)
+@patch("clayde.freeshard.loop.find_open_pr", return_value=None)
+@patch("clayde.freeshard.loop.get_default_branch", return_value="main")
+@patch("clayde.freeshard.loop.get_assigned_issues")
+def test_tick_routes_escalate(mock_assigned, _gdb, _fop, _ib, _dp, _cbc, mock_escalate):
+    """No-PR card with attempts >= cap routes to run_escalate."""
+    mock_assigned.return_value = [_issue(APP_ISSUE_URL)]
+    s = _settings()
+    s.fs_max_branch_commits = 20
+    g = MagicMock()
+    n = loop.tick(g, s)
+    assert n == 1
+    mock_escalate.assert_called_once_with(g, "FreeshardBase", "app-repository", 7, "max")
 
 
 @pytest.mark.parametrize("phase", [Phase.CI_WAIT, Phase.AWAITING_MERGE])

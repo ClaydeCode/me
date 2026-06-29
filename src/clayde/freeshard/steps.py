@@ -71,6 +71,7 @@ def run_implement(g, owner: str, repo: str, number: int, default_branch: str) ->
             "Local verify failed for %s/%s#%d — leaving WIP on branch: %s",
             owner, repo, number, log_tail[-200:],
         )
+        _push_branch(worktree, branch)
         return
 
     _push_branch(worktree, branch)
@@ -118,6 +119,23 @@ def run_handoff(g, owner: str, repo: str, number: int, pr_number: int, reviewer:
     """Assign reviewer, post ready-for-review comment, remove worktree."""
     add_pr_reviewer(g, owner, repo, pr_number, reviewer)
     post_comment(g, owner, repo, number, "ready for review — CI green")
+    remove_worktree(owner, repo, number)
+
+
+def run_escalate(g, owner: str, repo: str, number: int, reviewer: str) -> None:
+    """Add manual-verify-required label on issue, assign reviewer, post comment, remove worktree.
+
+    Called when the branch-commit cap is reached with no open PR — auto-implement
+    gave up. Idempotent: if the label is already present, returns immediately.
+    """
+    repo_obj = g.get_repo(f"{owner}/{repo}")
+    issue_obj = repo_obj.get_issue(number)
+    existing_labels = {lbl.name for lbl in issue_obj.get_labels()}
+    if "manual-verify-required" in existing_labels:
+        return
+    issue_obj.add_to_labels("manual-verify-required")
+    issue_obj.add_to_assignees(reviewer)
+    post_comment(g, owner, repo, number, "Auto-implement gave up after repeated failed attempts — needs your hands")
     remove_worktree(owner, repo, number)
 
 

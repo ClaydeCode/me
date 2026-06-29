@@ -18,19 +18,21 @@ class Phase(StrEnum):
     MANUAL_VERIFY = "manual_verify"   # PR open, CI failed, fix cap reached
     HANDOFF = "handoff"               # PR open, CI green, Max not yet reviewer
     AWAITING_MERGE = "awaiting_merge" # PR open, CI green, Max is reviewer
+    ESCALATE = "escalate"             # no open PR, branch-commit cap reached
 
 
 def derive_phase(*, pr_open: bool, ci_status: str | None,
                  max_is_reviewer: bool, fix_attempts: int, fix_cap: int = 2,
-                 ci_required: bool = True) -> Phase:
+                 ci_required: bool = True,
+                 attempts: int = 0, attempt_cap: int = 20) -> Phase:
     if not pr_open:
-        return Phase.IMPLEMENT
+        return Phase.ESCALATE if attempts >= attempt_cap else Phase.IMPLEMENT
     if not ci_required:
         return Phase.AWAITING_MERGE if max_is_reviewer else Phase.HANDOFF
     if ci_status in _CI_PENDING:
         return Phase.CI_WAIT
     if ci_status in _CI_FAILED:
-        return Phase.MANUAL_VERIFY if fix_attempts >= fix_cap else Phase.CI_FIX
+        return Phase.MANUAL_VERIFY if (fix_attempts >= fix_cap or attempts >= attempt_cap) else Phase.CI_FIX
     if ci_status in _CI_SUCCESS:
         return Phase.AWAITING_MERGE if max_is_reviewer else Phase.HANDOFF
     # Unrecognized status: never assume green. Treat as still pending — a

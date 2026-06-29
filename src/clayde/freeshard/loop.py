@@ -15,11 +15,13 @@ from clayde.freeshard.phase import Phase, derive_phase
 from clayde.freeshard.repos import is_non_core
 from clayde.freeshard.steps import (
     run_ci_fix,
+    run_escalate,
     run_handoff,
     run_implement,
     run_manual_verify,
 )
 from clayde.github import (
+    count_branch_commits,
     count_fix_commits,
     find_open_pr,
     get_assigned_issues,
@@ -67,6 +69,8 @@ def _route(
     ref = f"{owner}/{repo}#{number}"
     if phase is Phase.IMPLEMENT:
         run_implement(g, owner, repo, number, default_branch)
+    elif phase is Phase.ESCALATE:
+        run_escalate(g, owner, repo, number, settings.fs_reviewer)
     elif phase is Phase.CI_FIX:
         ci_log = _ci_failure_summary(g, owner, repo, head) if head else "CI failed"
         run_ci_fix(g, owner, repo, number, default_branch, ci_log)
@@ -117,6 +121,8 @@ def _process_issue(g, settings, issue) -> bool:
             is_rev = is_reviewer_assigned(g, owner, repo, pr_number, settings.fs_reviewer)
             fix_attempts = count_fix_commits(g, owner, repo, branch, default_branch)
 
+        attempts = count_branch_commits(g, owner, repo, branch, default_branch)
+
         try:
             ci_required = has_ci_workflows(g, owner, repo)
         except Exception:
@@ -131,6 +137,8 @@ def _process_issue(g, settings, issue) -> bool:
             max_is_reviewer=bool(is_rev),
             fix_attempts=fix_attempts,
             ci_required=ci_required,
+            attempts=attempts,
+            attempt_cap=settings.fs_max_branch_commits,
         )
         log.info("%s — phase=%s", ref, phase)
 

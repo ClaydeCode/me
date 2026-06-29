@@ -211,11 +211,18 @@ def get_ci_status(g: Github, owner: str, repo: str, ref: str) -> str | None:
     commit = _get_repo(g, owner, repo).get_commit(ref)
     states: list[str] = []
 
-    combined = commit.get_combined_status().state  # success|failure|pending|error
-    if combined and combined != "pending":
-        states.append("failure" if combined in ("failure", "error") else "success")
-    elif combined == "pending":
-        states.append("pending")
+    # Legacy commit-status API defaults state to "pending" when a repo has zero
+    # statuses (modern repos use check-runs only). Only trust it when statuses
+    # actually exist — otherwise it poisons a green check-runs result to pending.
+    combined_status = commit.get_combined_status()
+    if combined_status.total_count > 0:
+        combined = combined_status.state  # success|failure|pending|error
+        if combined in ("failure", "error"):
+            states.append("failure")
+        elif combined == "pending":
+            states.append("pending")
+        else:
+            states.append("success")
 
     for run in commit.get_check_runs():
         if run.status != "completed":
@@ -249,6 +256,18 @@ def count_fix_commits(g: Github, owner: str, repo: str, branch: str, default_bra
     """
     commits = _get_repo(g, owner, repo).compare(default_branch, branch).commits
     return sum(1 for c in commits if c.commit.message.startswith("fix(ci):"))
+
+
+def count_branch_commits(g: Github, owner: str, repo: str, branch: str, default_branch: str) -> int:
+    """Return total number of commits unique to branch vs default_branch.
+
+    Uses the compare API so only branch-unique commits are counted. Returns 0
+    on GithubException (branch missing, branch equal to base, etc.).
+    """
+    try:
+        return len(_get_repo(g, owner, repo).compare(default_branch, branch).commits)
+    except GithubException:
+        return 0
 
 
 def has_ci_workflows(g: Github, owner: str, repo: str) -> bool:
