@@ -287,3 +287,21 @@ def test_malformed_issue_url_does_not_abort_tick(
     n = loop.tick(MagicMock(), _settings())
     assert n == 1
     mock_impl.assert_called_once()
+
+
+def test_run_cycle_sets_gh_token_for_git_credential_helper():
+    """run_cycle must export GH_TOKEN so the container's `!gh auth git-credential`
+    helper can authenticate branch pushes (else push fails with exit 128)."""
+    import os
+    from unittest.mock import MagicMock, patch
+    from clayde.freeshard import loop
+
+    settings = MagicMock(github_token="ghp_testtoken123")
+    os.environ.pop("GH_TOKEN", None)
+    with patch("clayde.freeshard.loop.check_disk_and_alert"), \
+         patch("clayde.freeshard.loop.is_claude_available", return_value=True), \
+         patch("clayde.freeshard.loop.get_github_client", return_value=MagicMock()), \
+         patch("clayde.freeshard.loop.tick", return_value=0):
+        loop.run_cycle(settings)
+    assert os.environ.get("GH_TOKEN") == "ghp_testtoken123"
+    os.environ.pop("GH_TOKEN", None)
