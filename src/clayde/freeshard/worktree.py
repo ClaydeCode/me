@@ -31,12 +31,12 @@ def add_worktree(owner: str, repo: str, number: int, default_branch: str) -> Pat
         subprocess.run(["git", "checkout", branch], cwd=str(wt), capture_output=True, text=True)
         return wt
 
-    # ls-remote is read-only and does not mutate the base clone — run before acquiring the lock
-    # so concurrent worktree creations don't all serialise behind a single network round-trip.
-    base_path = DATA_DIR / "repos" / f"{owner}__{repo}"
+    # ls-remote against the remote URL needs no local clone, so it is correct on first run
+    # and safe to run before acquiring the lock (read-only, no base-clone mutation).
+    clone_url = f"https://github.com/{owner}/{repo}.git"
     ls = subprocess.run(
-        ["git", "ls-remote", "--heads", "origin", branch],
-        cwd=str(base_path), capture_output=True, text=True,
+        ["git", "ls-remote", "--heads", clone_url, branch],
+        capture_output=True, text=True,
     )
     if ls.returncode != 0:
         raise RuntimeError(f"ls-remote failed for {branch}: {ls.stderr}")
