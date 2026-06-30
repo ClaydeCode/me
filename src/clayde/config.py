@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # Orchestrator behaviour
     loop_interval_s: int = 300
     implement_max_retries: int = 3
+    fs_enabled: bool = False
     fs_reviewer: str = "max-tet"
     fs_parallelism: int = 1
     fs_loop_interval_s: int = 120

@@ -158,3 +158,9 @@ def test_kb_path_default():
     from clayde.config import Settings
     s = Settings(_env_file=None)
     assert s.kb_path == "/home/clayde/knowledge_base"
+
+
+def test_fs_enabled_defaults_off():
+    from clayde.config import Settings
+    s = Settings(_env_file=None)
+    assert s.fs_enabled is False
