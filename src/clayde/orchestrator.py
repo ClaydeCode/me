@@ -58,7 +58,13 @@ async def _run_with_pebble() -> None:
             kb_path=settings.kb_path,
         )
 
-    await asyncio.gather(server.serve(), worker_task(), _freeshard_loop(settings))
+    tasks = [server.serve(), worker_task()]
+    if settings.fs_enabled:
+        log.info("Freeshard loop enabled")
+        tasks.append(_freeshard_loop(settings))
+    else:
+        log.info("Freeshard loop disabled (CLAYDE_FS_ENABLED not set)")
+    await asyncio.gather(*tasks)
 
 
 def run_loop():
