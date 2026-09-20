@@ -6,6 +6,9 @@ state.json
 repos/
 logs/
 
+# Worktrees
+.worktrees/
+
 # Python
 .venv/
 __pycache__/
