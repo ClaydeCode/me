@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from clayde.webhook.skills import Skill, _parse_skill, discover_skills
+from clayde.service.skills import Skill, _parse_skill, discover_skills
 
 
 def _write(path: Path, content: str) -> Path:
@@ -97,7 +97,7 @@ def test_discover_missing_root(tmp_path):
     assert discover_skills(missing) == []
 
 
-from clayde.webhook.skills import build_system_prompt, build_user_prompt
+from clayde.service.skills import build_system_prompt, build_user_prompt
 
 
 def test_build_system_prompt_with_skills():
@@ -133,7 +133,7 @@ def test_build_user_prompt():
 
 
 def test_prompt_no_longer_caps_to_one_skill():
-    from clayde.webhook.skills import Skill, build_system_prompt
+    from clayde.service.skills import Skill, build_system_prompt
     from pathlib import Path
     p = build_system_prompt([
         Skill(name="add-note", description="Save a note", path=Path("/skills/personal/add-note.md")),
@@ -145,7 +145,7 @@ def test_prompt_no_longer_caps_to_one_skill():
 
 
 def test_prompt_contains_json_contract():
-    from clayde.webhook.skills import build_system_prompt
+    from clayde.service.skills import build_system_prompt
     p = build_system_prompt([])
     assert '```json' in p
     assert '"title"' in p
@@ -154,13 +154,13 @@ def test_prompt_contains_json_contract():
 
 
 def test_prompt_when_no_skills_still_invites_judgement():
-    from clayde.webhook.skills import build_system_prompt
+    from clayde.service.skills import build_system_prompt
     p = build_system_prompt([])
     assert "judgement" in p.lower() or "judgment" in p.lower()
 
 
 def test_discovers_builtin_alongside_host(tmp_path):
-    from clayde.webhook.skills import discover_skills
+    from clayde.service.skills import discover_skills
     # Simulate the in-container layout: /skills/builtin + /skills/personal.
     (tmp_path / "builtin").mkdir()
     (tmp_path / "personal").mkdir()
@@ -177,7 +177,7 @@ def test_discovers_builtin_alongside_host(tmp_path):
 
 def test_discover_personal_overrides_builtin(tmp_path, caplog):
     """Non-builtin skills (personal/shared) win over builtin on name collision."""
-    from clayde.webhook.skills import discover_skills
+    from clayde.service.skills import discover_skills
     (tmp_path / "builtin").mkdir()
     (tmp_path / "personal").mkdir()
     (tmp_path / "builtin" / "voice-command.md").write_text(
@@ -195,7 +195,7 @@ def test_discover_personal_overrides_builtin(tmp_path, caplog):
 
 def test_voice_command_builtin_skill_exists():
     """The shipped voice-command builtin skill has the expected frontmatter."""
-    from clayde.webhook import skills as skills_mod
+    from clayde.service import skills as skills_mod
     import importlib.resources
     builtin_dir = Path(skills_mod.__file__).parent.parent / "skills_builtin"
     vc_path = builtin_dir / "voice-command.md"

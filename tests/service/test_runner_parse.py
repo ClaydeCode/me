@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from clayde.webhook.runner import extract_notification_payload
+from clayde.service.runner import extract_notification_payload
 
 
 def test_extracts_last_json_block():

@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 
-from clayde.webhook.notify import NotificationPayload, _encode_header_value, send_ntfy
+from clayde.service.notify import NotificationPayload, _encode_header_value, send_ntfy
 
 
 def test_notification_payload_clamps_length():

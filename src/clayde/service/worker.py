@@ -12,17 +12,17 @@ from clayde.claude import (
 )
 from clayde.config import get_settings
 from clayde.telemetry import get_tracer
-from clayde.webhook.notify import send_ntfy
-from clayde.webhook.queue import JobQueue, PebbleJob
-from clayde.webhook.runner import extract_notification_payload, invoke_claude_pebble
-from clayde.webhook.skills import (
+from clayde.service.notify import send_ntfy
+from clayde.service.queue import JobQueue, Job
+from clayde.service.runner import extract_notification_payload, invoke_claude_job
+from clayde.service.skills import (
     SKILLS_ROOT,
     build_system_prompt,
     build_user_prompt,
     discover_skills,
 )
 
-log = logging.getLogger("clayde.webhook.worker")
+log = logging.getLogger("clayde.service.worker")
 
 _FALLBACK_TITLE = "Pebble: done (no summary)"
 
@@ -45,7 +45,7 @@ async def _notify(*, title: str, body: str, success: bool) -> None:
     )
 
 
-async def process_job(job: PebbleJob, *, timeout_s: int, kb_path: str) -> None:
+async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
     """Process a single Pebble job. Emits exactly one ntfy notification."""
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.pebble.process") as span:
@@ -62,7 +62,7 @@ async def process_job(job: PebbleJob, *, timeout_s: int, kb_path: str) -> None:
         t0 = time.monotonic()
         outcome = "worker_error"
         try:
-            output = await invoke_claude_pebble(
+            output = await invoke_claude_job(
                 system_prompt=system_prompt,
                 user_text=user_text,
                 cwd=kb_path,

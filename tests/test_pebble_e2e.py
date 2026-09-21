@@ -10,9 +10,9 @@ import respx
 from httpx import ASGITransport, AsyncClient
 
 from clayde.config import _reset_settings
-from clayde.webhook import worker as worker_mod
+from clayde.service import worker as worker_mod
 from clayde.webhook.app import create_app
-from clayde.webhook.queue import JobQueue
+from clayde.service.queue import JobQueue
 
 
 @pytest.mark.asyncio
@@ -38,7 +38,7 @@ async def test_e2e_pebble_voice_command_to_ntfy(monkeypatch, tmp_path):
             "```\n"
         )
 
-    monkeypatch.setattr(worker_mod, "invoke_claude_pebble", fake_invoke)
+    monkeypatch.setattr(worker_mod, "invoke_claude_job", fake_invoke)
     monkeypatch.setattr(worker_mod, "discover_skills", lambda root=None: [])
     monkeypatch.setattr(worker_mod, "build_system_prompt", lambda skills, timeout_s=300: "SYS")
     monkeypatch.setattr(worker_mod, "build_user_prompt", lambda text, ts: text)

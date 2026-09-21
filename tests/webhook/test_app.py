@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from clayde.webhook.app import PebblePayload, create_app
-from clayde.webhook.queue import JobQueue
+from clayde.service.queue import JobQueue
 
 
 @pytest.fixture
@@ -89,7 +89,7 @@ def test_pebble_returns_503_when_full(queue, monkeypatch):
 @pytest.mark.asyncio
 async def test_queue_full_emits_ntfy(monkeypatch):
     from clayde.webhook import app as app_mod
-    from clayde.webhook.queue import JobQueue, QueueFullError
+    from clayde.service.queue import JobQueue, QueueFullError
 
     calls = []
 
