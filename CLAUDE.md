@@ -69,15 +69,30 @@ src/clayde/
     __init__.py
     work.py             # run(issue_url) — unified: Claude decides next action
                         #   (ask, plan, implement, open PR, or address review)
-  webhook/
+  service/              # job-execution core, shared by the Pebble webhook and
+                        #   the scheduler
+    __init__.py
+    queue.py            # Job (origin: "pebble" | "scheduler"), JobQueue
+                        #   (in-memory asyncio.Queue), QueueFullError
+    runner.py           # invoke_claude_job — async CLI subprocess (auto
+                        #   permission mode), extract_notification_payload
+    skills.py           # Skill model, /skills/ discovery (SKILL.md + flat
+                        #   builtin), origin-aware system/user prompt builders
+    notify.py           # send_ntfy + NotificationPayload model
+    worker.py           # worker_loop, process_job — pop jobs, OTel process
+                        #   span; skips the success-notify for origin=scheduler
+  webhook/              # thin HTTP layer — Pebble ingress only
     __init__.py
     app.py              # FastAPI app, /webhook/pebble, /health, OTel enqueue span
     auth.py             # constant-time bearer-token verification
-    notify.py           # send_ntfy + NotificationPayload model
-    queue.py            # PebbleJob, JobQueue (in-memory asyncio.Queue), QueueFullError
-    runner.py           # invoke_claude_pebble — async CLI subprocess, fresh session
-    skills.py           # Skill model, /skills/ discovery, system + user prompt builders
-    worker.py           # worker_loop, process_job — pop jobs, OTel process span
+  scheduler/
+    __init__.py
+    tasks.py            # ScheduledTask, parse_task_file(), discover_tasks()
+                        #   — cron/at frontmatter under CLAYDE_SCHEDULER_DIR
+    state.py            # load_state()/save_state(), get_last_fired()/
+                        #   set_last_fired() — /data/scheduler_state.json
+    loop.py             # scheduler_loop()/run_tick() — due-ness, lateness
+                        #   annotation, enqueue, done/ move for fired one-offs
   skills_builtin/
     ping.md             # built-in health-check skill (baked into image)
 
@@ -124,6 +139,11 @@ Plain `KEY=VALUE` file (no shell quoting). All keys use `CLAYDE_` prefix and are
 | `CLAYDE_DISK_ALERT_THRESHOLD_PCT` | Usage % that triggers an ntfy alert (default `85`) |
 | `CLAYDE_DISK_ALERT_PATH` | Path whose partition is checked — same volume as host root (default `/data`) |
 | `CLAYDE_DISK_ALERT_COOLDOWN_S` | Min seconds between repeat alerts while over threshold (default `21600`) |
+| `CLAYDE_SCHEDULER_ENABLED` | Set to `true` to enable the scheduled-task loop (default `false`) |
+| `CLAYDE_SCHEDULER_DIR` | In-container dir scanned for task markdown files (default `/tasks`) |
+| `CLAYDE_SCHEDULER_INTERVAL_S` | Scheduler poll interval in seconds (default `30`) |
+| `CLAYDE_SCHEDULER_TZ` | Default IANA timezone for task frontmatter without its own `tz` (default `Europe/Berlin`) |
+| `CLAYDE_SCHEDULER_TIMEOUT` | Per-task CLI timeout in seconds (default `300`) |
 
 Config is loaded via `get_settings()` (singleton). `GH_TOKEN` is exported at startup for the `gh` CLI.
 
