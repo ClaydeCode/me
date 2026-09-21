@@ -36,8 +36,12 @@ def captured_ntfy(monkeypatch):
 @pytest.fixture
 def fake_skills(monkeypatch):
     monkeypatch.setattr(worker, "discover_skills", lambda root=None: [])
-    monkeypatch.setattr(worker, "build_system_prompt", lambda skills, timeout_s=300: "SYS")
-    monkeypatch.setattr(worker, "build_user_prompt", lambda text, ts: f"USER:{text}")
+    monkeypatch.setattr(
+        worker, "build_system_prompt", lambda skills, timeout_s=300, origin="pebble": "SYS"
+    )
+    monkeypatch.setattr(
+        worker, "build_user_prompt", lambda text, ts, origin="pebble": f"USER:{text}"
+    )
 
 
 def _job():

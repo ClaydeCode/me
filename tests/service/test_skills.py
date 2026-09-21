@@ -206,3 +206,22 @@ def test_voice_command_builtin_skill_exists():
     body = vc_path.read_text()
     assert "speech-to-text" in body or "voice" in body.lower()
     assert "/home/clayde/knowledge_base" in body
+
+
+def test_system_prompt_scheduler_framing():
+    p = build_system_prompt([], timeout_s=300, origin="scheduler")
+    assert "scheduled task" in p.lower()
+    assert "pebble watch" not in p.lower()
+
+
+def test_system_prompt_pebble_framing_unchanged():
+    p = build_system_prompt([], timeout_s=300, origin="pebble")
+    assert "pebble watch" in p.lower()
+
+
+def test_user_prompt_scheduler_has_no_timestamp_prefix():
+    assert build_user_prompt("do it", 123, origin="scheduler") == "do it"
+
+
+def test_user_prompt_pebble_unchanged():
+    assert build_user_prompt("do it", 123, origin="pebble") == "(timestamp 123)\ndo it"

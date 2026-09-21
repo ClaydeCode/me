@@ -40,8 +40,10 @@ async def test_e2e_pebble_voice_command_to_ntfy(monkeypatch, tmp_path):
 
     monkeypatch.setattr(worker_mod, "invoke_claude_job", fake_invoke)
     monkeypatch.setattr(worker_mod, "discover_skills", lambda root=None: [])
-    monkeypatch.setattr(worker_mod, "build_system_prompt", lambda skills, timeout_s=300: "SYS")
-    monkeypatch.setattr(worker_mod, "build_user_prompt", lambda text, ts: text)
+    monkeypatch.setattr(
+        worker_mod, "build_system_prompt", lambda skills, timeout_s=300, origin="pebble": "SYS"
+    )
+    monkeypatch.setattr(worker_mod, "build_user_prompt", lambda text, ts, origin="pebble": text)
 
     # Real queue + real worker_loop.
     q = JobQueue(maxsize=4)

@@ -41,8 +41,13 @@ def _parse_skill(path: Path) -> Skill:
     return Skill(name=name, description=desc, path=path)
 
 
+_INTRO = {
+    "pebble": "You are Clayde, executing a request from the user via a Pebble watch.",
+    "scheduler": "You are Clayde, executing a scheduled task.",
+}
+
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are Clayde, executing a request from the user via a Pebble watch.
+{intro}
 
 You have a hard wall-clock budget of {timeout_s} seconds for this
 entire request. If your process exceeds it, it is killed and the user gets
@@ -69,11 +74,14 @@ by the framework.
 """
 
 
-def build_system_prompt(skills: list[Skill], timeout_s: int = 300) -> str:
+def build_system_prompt(
+    skills: list[Skill], timeout_s: int = 300, origin: str = "pebble"
+) -> str:
     """Build the system prompt sent to the Claude CLI for a Pebble request.
 
     ``timeout_s`` is the hard wall-clock budget enforced by the runner; it is
-    surfaced in the prompt so Claude can scope work to fit.
+    surfaced in the prompt so Claude can scope work to fit. ``origin``
+    selects the opening framing line ("pebble" or "scheduler").
     """
     if not skills:
         skill_section = "Available skills: (none currently registered)"
@@ -87,12 +95,15 @@ def build_system_prompt(skills: list[Skill], timeout_s: int = 300) -> str:
             f"{files}"
         )
     return _SYSTEM_PROMPT_TEMPLATE.format(
+        intro=_INTRO.get(origin, _INTRO["pebble"]),
         skill_section=skill_section, timeout_s=timeout_s,
     )
 
 
-def build_user_prompt(text: str, timestamp: int) -> str:
+def build_user_prompt(text: str, timestamp: int, origin: str = "pebble") -> str:
     """Build the user prompt (passed to ``claude -p``) for a Pebble request."""
+    if origin == "scheduler":
+        return text
     return f"(timestamp {timestamp})\n{text}"
 
 
