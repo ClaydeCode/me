@@ -236,3 +236,97 @@ spawns a fresh Claude CLI session (no context carries between requests)
 with `cwd` set to the knowledge-base mount. Claude is free to use any
 number of skills per request; every terminal outcome (success, failure,
 timeout, usage limit, queue full, etc.) emits an ntfy notification.
+
+---
+
+## Scheduler
+
+Clayde can also run tasks on a schedule — recurring (cron) or one-off (a
+single future time) — instead of waiting for a Pebble request. Scheduled
+runs feed the same job queue and worker as the Pebble webhook, so they use
+the same Claude CLI backend and permission mode; only the prompt framing and
+notification behaviour differ (below).
+
+To enable:
+
+1. Create the task directory on the host: `mkdir -p ~/clayde-tasks`. It's
+   mounted **read-write** at `/tasks` (already wired in
+   `docker-compose.yml`) — read-write because fired one-off tasks are moved
+   into a `done/` subdirectory, not deleted.
+2. Set `CLAYDE_SCHEDULER_ENABLED=true` in `data/config.env`. Other
+   `CLAYDE_SCHEDULER_*` keys (poll interval `INTERVAL_S`, default timezone
+   `TZ`, in-container task dir `DIR`, per-task CLI timeout `TIMEOUT`) have
+   working defaults — see `config.env.template` if you need to change them.
+3. Drop one markdown file per task into `~/clayde-tasks/`:
+
+   ```markdown
+   ---
+   cron: "0 8 * * *"        # recurring, 5-field cron
+   # at: 2026-09-21T08:00    # one-off, ISO-8601 local datetime (mutually exclusive with cron)
+   tz: Europe/Berlin         # optional; default CLAYDE_SCHEDULER_TZ
+   enabled: true             # optional; default true
+   title: keep-warm          # optional; label for logs only
+   timeout: 4h               # optional; default CLAYDE_SCHEDULER_TIMEOUT (300s)
+   ---
+   Run a trivial health check and confirm you are alive.
+   ```
+
+   Exactly one of `cron` or `at` is required — `cron` is a standard 5-field
+   expression; `at` is a local datetime interpreted in `tz`. Everything
+   after the frontmatter is the prompt sent to Claude. Malformed files
+   (missing/both schedule keys, bad cron, unterminated frontmatter) are
+   logged and skipped, not ntfy'd — that would spam every poll tick.
+
+   `timeout` sets this task's own CLI timeout, overriding
+   `CLAYDE_SCHEDULER_TIMEOUT` for that one job — useful for a long overnight
+   deep-research run that needs more than the default budget. It accepts a
+   duration (`4h`, `90m`, `45s`) or a bare number of seconds, and is
+   hard-capped at 4 hours; a requested value above the cap is clamped and
+   logged, not rejected. A malformed `timeout` value makes the whole file
+   malformed, same as a bad `cron`.
+
+   Long-running tasks should have their prompt instruct the agent to persist
+   progress periodically (e.g. write interim findings to the KB inbox as it
+   goes), not just at the end. A run that hits a usage limit or its timeout
+   is a single unattended attempt with no auto-resume, so whatever interim
+   state it wrote is all that survives.
+
+A fired one-off task is moved to `~/clayde-tasks/done/<epoch>-<name>.md`
+rather than deleted, so it stays as a record of what ran and when. Recurring
+tasks are never moved; their last-fired time is tracked in the container's
+own `/data/scheduler_state.json`, keyed by filename.
+
+### Notifications
+
+Unlike Pebble requests, a scheduler job stays **silent on success** — the
+framework emits no ntfy for a clean run. The framework still ntfy's on
+**failure** (timeout, usage limit, CLI error, auth error, worker crash),
+because a run that didn't finish can't self-report. If a task should notify
+on success (e.g. "call the dentist" or a genuine reminder), say so in the
+task's own prompt and let the agent send it itself via the `ntfy-ping`
+skill — there is no per-task notify field.
+
+### Skill library mount
+
+`docker-compose.yml` mounts the whole personal skill library read-only at
+`/skills/kb`, alongside the existing `/skills/personal` and `/skills/shared`
+Pebble skill dirs, so a scheduled task (or a Pebble request) can use any
+skill from the knowledge base, including `ntfy-ping`.
+
+### Permission mode
+
+Both scheduled and Pebble jobs run the Claude CLI with
+`--permission-mode auto --permission-prompts none` — Claude proceeds without
+interactive approval, since nobody is watching an unattended run to answer a
+prompt.
+
+### Bootstrapping caveat
+
+The scheduler presumes the Claude CLI login (see [Option B: Claude Code
+CLI](#option-b-claude-code-cli-cli) above) is already established. A recurring
+task that runs the CLI regularly keeps that login's OAuth refresh lineage
+alive once it's ticking — but the login has to be created once, by hand,
+*before* the first tick, and must not be left to lapse in the meantime. A
+scheduler enabled against a login that was never created, or that expired
+before its first run, fails with an auth error on every tick (which does
+ntfy, per the failure behaviour above).

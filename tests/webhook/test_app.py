@@ -1,8 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from clayde.config import get_settings
 from clayde.webhook.app import PebblePayload, create_app
-from clayde.webhook.queue import JobQueue
+from clayde.service.queue import JobQueue
 
 
 @pytest.fixture
@@ -37,6 +38,17 @@ def test_pebble_accepts_valid_request(client, queue):
     body = r.json()
     assert body["queued"] is True
     assert "id" in body and isinstance(body["id"], str) and len(body["id"]) > 0
+
+
+def test_pebble_job_carries_pebble_timeout(client, queue):
+    r = client.post(
+        "/webhook/pebble",
+        json={"text": "hello", "timestamp": 1778068506},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert r.status_code == 200
+    job = queue._q.get_nowait()
+    assert job.timeout_s == get_settings().pebble_timeout
 
 
 def test_pebble_rejects_missing_token(client):
@@ -89,7 +101,7 @@ def test_pebble_returns_503_when_full(queue, monkeypatch):
 @pytest.mark.asyncio
 async def test_queue_full_emits_ntfy(monkeypatch):
     from clayde.webhook import app as app_mod
-    from clayde.webhook.queue import JobQueue, QueueFullError
+    from clayde.service.queue import JobQueue, QueueFullError
 
     calls = []
 

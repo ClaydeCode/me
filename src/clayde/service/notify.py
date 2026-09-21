@@ -14,7 +14,7 @@ from pydantic import BaseModel, field_validator
 
 from clayde.telemetry import get_tracer
 
-log = logging.getLogger("clayde.webhook.notify")
+log = logging.getLogger("clayde.service.notify")
 
 
 def _encode_header_value(text: str) -> str:

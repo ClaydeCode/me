@@ -6,6 +6,9 @@ state.json
 repos/
 logs/
 
+# Worktrees
+.worktrees/
+
 # Python
 .venv/
 __pycache__/
@@ -21,3 +24,6 @@ docker-compose.override.yml
 
 # IDE
 .idea
+
+# SDD scratch
+.superpowers/

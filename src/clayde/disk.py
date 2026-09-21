@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from clayde.config import DATA_DIR, Settings
-from clayde.webhook.notify import send_ntfy
+from clayde.service.notify import send_ntfy
 
 log = logging.getLogger("clayde.disk")
 

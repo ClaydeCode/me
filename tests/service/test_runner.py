@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from clayde.claude import CliInvocationError, InvocationTimeoutError, UsageLimitError
-from clayde.webhook import runner
+from clayde.service import runner
 
 
 class _FakeProc:
@@ -35,7 +35,7 @@ def fake_subproc(monkeypatch):
 
 async def test_runner_returns_result_text(fake_subproc, tmp_path):
     fake_subproc["proc"] = _FakeProc(json.dumps({"result": "all good"}).encode())
-    out = await runner.invoke_claude_pebble(
+    out = await runner.invoke_claude_job(
         system_prompt="sys", user_text="hi", cwd=str(tmp_path), timeout_s=10,
     )
     assert out == "all good"
@@ -60,7 +60,7 @@ async def test_runner_raises_timeout(fake_subproc, tmp_path, monkeypatch):
     fake_subproc["proc"] = proc
 
     with pytest.raises(InvocationTimeoutError):
-        await runner.invoke_claude_pebble(
+        await runner.invoke_claude_job(
             system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=0,
         )
     proc.kill.assert_called_once()
@@ -71,14 +71,14 @@ async def test_runner_raises_usage_limit_on_stderr(fake_subproc, tmp_path):
         stdout=b"{}", stderr=b"hit your usage limit", returncode=1,
     )
     with pytest.raises(UsageLimitError):
-        await runner.invoke_claude_pebble(
+        await runner.invoke_claude_job(
             system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
         )
 
 
 async def test_runner_returns_no_match_unchanged(fake_subproc, tmp_path):
     fake_subproc["proc"] = _FakeProc(json.dumps({"result": "No matching skill"}).encode())
-    out = await runner.invoke_claude_pebble(
+    out = await runner.invoke_claude_job(
         system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
     )
     assert out == "No matching skill"
@@ -93,7 +93,7 @@ async def test_runner_raises_usage_limit_on_is_error_output(fake_subproc, tmp_pa
         returncode=1,
     )
     with pytest.raises(UsageLimitError):
-        await runner.invoke_claude_pebble(
+        await runner.invoke_claude_job(
             system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
         )
 
@@ -105,7 +105,7 @@ async def test_runner_raises_runtime_error_on_auth_failure(fake_subproc, tmp_pat
         returncode=1,
     )
     with pytest.raises(RuntimeError, match="authentication failed"):
-        await runner.invoke_claude_pebble(
+        await runner.invoke_claude_job(
             system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
         )
 
@@ -125,7 +125,7 @@ async def test_runner_kills_proc_on_external_cancel(fake_subproc, tmp_path):
     fake_subproc["proc"] = proc
 
     task = asyncio.create_task(
-        runner.invoke_claude_pebble(
+        runner.invoke_claude_job(
             system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=60,
         )
     )
@@ -141,7 +141,7 @@ async def test_runner_raises_cli_invocation_error_on_nonzero(fake_subproc, tmp_p
         stdout=b'{"result": "boom"}', stderr=b"boom on stderr", returncode=2,
     )
     with pytest.raises(CliInvocationError) as exc:
-        await runner.invoke_claude_pebble(
+        await runner.invoke_claude_job(
             system_prompt="sys", user_text="hi", cwd=str(tmp_path), timeout_s=5,
         )
     assert "boom" in exc.value.stderr
@@ -151,7 +151,33 @@ async def test_runner_returns_text_on_zero_exit(fake_subproc, tmp_path):
     fake_subproc["proc"] = _FakeProc(
         stdout=json.dumps({"result": "ok"}).encode(), stderr=b"", returncode=0,
     )
-    out = await runner.invoke_claude_pebble(
+    out = await runner.invoke_claude_job(
         system_prompt="sys", user_text="hi", cwd=str(tmp_path), timeout_s=5,
     )
     assert out == "ok"
+
+
+async def test_invoke_uses_auto_permission_mode(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        async def communicate(self):
+            return (b'{"result": "ok", "is_error": false}', b"")
+        def kill(self): pass
+        async def wait(self): return 0
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    await runner.invoke_claude_job(
+        system_prompt="s", user_text="u", cwd=str(tmp_path), timeout_s=5,
+    )
+    args = captured["args"]
+    assert "--permission-mode" in args
+    assert "auto" in args
+    assert "--permission-prompts" in args
+    assert "none" in args
+    assert "--dangerously-skip-permissions" not in args

@@ -16,14 +16,14 @@ from clayde.claude import (
     _make_cli_env,
     _resolve_cli_bin,
 )
-from clayde.webhook.notify import NotificationPayload
+from clayde.service.notify import NotificationPayload
 
-log = logging.getLogger("clayde.webhook.worker")
+log = logging.getLogger("clayde.service.worker")
 
 _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)(?:\n\s*)?```", re.DOTALL)
 
 
-async def invoke_claude_pebble(
+async def invoke_claude_job(
     *, system_prompt: str, user_text: str, cwd: str, timeout_s: int,
 ) -> str:
     """Run the Claude CLI for a single Pebble request and return its result text.
@@ -39,7 +39,8 @@ async def invoke_claude_pebble(
         "-p", user_text,
         "--append-system-prompt", system_prompt,
         "--output-format", "json",
-        "--dangerously-skip-permissions",
+        "--permission-mode", "auto",
+        "--permission-prompts", "none",
     ]
     log.info("Invoking Claude CLI (cwd=%s, timeout=%ds)", cwd, timeout_s)
     proc = await asyncio.create_subprocess_exec(

@@ -6,6 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+def test_scheduler_state_path_under_data():
+    from clayde.orchestrator import _scheduler_state_path
+    assert _scheduler_state_path().endswith("/scheduler_state.json")
+
+
 def test_run_loop_with_pebble_invokes_async_entry(monkeypatch):
     """run_loop() must hand off to the async Pebble entry point."""
     from clayde import orchestrator
@@ -37,7 +42,7 @@ def test_freeshard_loop_runs_inside_pebble_gather(monkeypatch):
     async def fake_serve():
         pass
 
-    async def fake_worker_loop(queue, *, timeout_s, kb_path):
+    async def fake_worker_loop(queue, *, kb_path):
         pass
 
     monkeypatch.setattr(orchestrator, "_shutdown", False)
@@ -49,6 +54,7 @@ def test_freeshard_loop_runs_inside_pebble_gather(monkeypatch):
     mock_settings.pebble_timeout = 60
     mock_settings.kb_path = "/kb"
     mock_settings.fs_loop_interval_s = 0
+    mock_settings.scheduler_enabled = False
 
     with (
         patch("clayde.orchestrator.setup_logging"),

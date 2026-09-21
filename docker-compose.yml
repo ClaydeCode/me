@@ -47,9 +47,16 @@ services:
       # under /skills/. Subdirectory layout is free; discovery is recursive.
       - ~/skills/personal:/skills/personal:ro
       - ~/skills/shared:/skills/shared:ro
+      # Whole personal skill library, read-only — lets scheduled tasks (and
+      # Pebble requests) use any skill from the knowledge base, e.g. ntfy-ping
+      # for an intentional success notification.
+      - ~/knowledge_base/skills:/skills/kb:ro
       # Pebble knowledge-base working directory — Syncthing on the host
       # handles cross-device sync; container performs no git on the KB.
       - ~/knowledge_base:/home/clayde/knowledge_base
+      # Scheduled-task markdown files (cron/at frontmatter). Read-write: the
+      # scheduler moves fired one-off files into a done/ subdirectory.
+      - ~/clayde-tasks:/tasks
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.clayde.rule=Host(`${CLAYDE_PEBBLE_HOST}`) && PathPrefix(`/webhook`)"

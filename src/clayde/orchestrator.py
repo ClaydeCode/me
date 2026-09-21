@@ -6,13 +6,18 @@ import signal
 
 import uvicorn
 
-from clayde.config import get_settings, setup_logging
+from clayde.config import DATA_DIR, get_settings, setup_logging
 from clayde.freeshard.loop import run_cycle
+from clayde.scheduler.loop import scheduler_loop
 from clayde.webhook import JobQueue, create_app, worker_loop
 
 log = logging.getLogger("clayde.orchestrator")
 
 _shutdown = False
+
+
+def _scheduler_state_path() -> str:
+    return str(DATA_DIR / "scheduler_state.json")
 
 
 def _handle_signal(signum, frame):
@@ -52,13 +57,24 @@ async def _run_with_pebble() -> None:
     server = uvicorn.Server(config)
 
     async def worker_task() -> None:
-        await worker_loop(
+        await worker_loop(queue, kb_path=settings.kb_path)
+
+    async def scheduler_task() -> None:
+        await scheduler_loop(
             queue,
-            timeout_s=settings.pebble_timeout,
-            kb_path=settings.kb_path,
+            tasks_dir=settings.scheduler_dir,
+            state_path=_scheduler_state_path(),
+            default_tz=settings.scheduler_tz,
+            interval_s=settings.scheduler_interval_s,
+            default_timeout_s=settings.scheduler_timeout,
         )
 
     tasks = [server.serve(), worker_task()]
+    if settings.scheduler_enabled:
+        log.info("Scheduler loop enabled")
+        tasks.append(scheduler_task())
+    else:
+        log.info("Scheduler loop disabled (CLAYDE_SCHEDULER_ENABLED not set)")
     if settings.fs_enabled:
         log.info("Freeshard loop enabled")
         tasks.append(_freeshard_loop(settings))

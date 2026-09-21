@@ -12,17 +12,17 @@ from clayde.claude import (
 )
 from clayde.config import get_settings
 from clayde.telemetry import get_tracer
-from clayde.webhook.notify import send_ntfy
-from clayde.webhook.queue import JobQueue, PebbleJob
-from clayde.webhook.runner import extract_notification_payload, invoke_claude_pebble
-from clayde.webhook.skills import (
+from clayde.service.notify import send_ntfy
+from clayde.service.queue import JobQueue, Job
+from clayde.service.runner import extract_notification_payload, invoke_claude_job
+from clayde.service.skills import (
     SKILLS_ROOT,
     build_system_prompt,
     build_user_prompt,
     discover_skills,
 )
 
-log = logging.getLogger("clayde.webhook.worker")
+log = logging.getLogger("clayde.service.worker")
 
 _FALLBACK_TITLE = "Pebble: done (no summary)"
 
@@ -45,10 +45,11 @@ async def _notify(*, title: str, body: str, success: bool) -> None:
     )
 
 
-async def process_job(job: PebbleJob, *, timeout_s: int, kb_path: str) -> None:
+async def process_job(job: Job, *, kb_path: str) -> None:
     """Process a single Pebble job. Emits exactly one ntfy notification."""
     tracer = get_tracer()
-    with tracer.start_as_current_span("clayde.pebble.process") as span:
+    with tracer.start_as_current_span("clayde.job.process") as span:
+        span.set_attribute("job.origin", job.origin)
         span.set_attribute("pebble.job_id", job.id)
         span.set_attribute("pebble.timestamp", job.timestamp)
         span.set_attribute("pebble.text", job.text)
@@ -56,17 +57,17 @@ async def process_job(job: PebbleJob, *, timeout_s: int, kb_path: str) -> None:
 
         skills = discover_skills(SKILLS_ROOT)
         span.set_attribute("pebble.skills_available", len(skills))
-        system_prompt = build_system_prompt(skills, timeout_s=timeout_s)
-        user_text = build_user_prompt(job.text, job.timestamp)
+        system_prompt = build_system_prompt(skills, timeout_s=job.timeout_s, origin=job.origin)
+        user_text = build_user_prompt(job.text, job.timestamp, origin=job.origin)
 
         t0 = time.monotonic()
         outcome = "worker_error"
         try:
-            output = await invoke_claude_pebble(
+            output = await invoke_claude_job(
                 system_prompt=system_prompt,
                 user_text=user_text,
                 cwd=kb_path,
-                timeout_s=timeout_s,
+                timeout_s=job.timeout_s,
             )
             payload = extract_notification_payload(output)
             if payload.title == _FALLBACK_TITLE:
@@ -75,16 +76,17 @@ async def process_job(job: PebbleJob, *, timeout_s: int, kb_path: str) -> None:
                 outcome = "success"
             else:
                 outcome = "claude_fail"
-            await _notify(
-                title=payload.title, body=payload.body, success=payload.success,
-            )
+            if job.origin != "scheduler":
+                await _notify(
+                    title=payload.title, body=payload.body, success=payload.success,
+                )
             log.info("[%s] processed outcome=%s", job.id, outcome)
         except InvocationTimeoutError:
             outcome = "timeout"
             log.warning("[%s] timeout", job.id)
             await _notify(
                 title="Pebble: timeout",
-                body=f"ran {timeout_s}s+",
+                body=f"ran {job.timeout_s}s+",
                 success=False,
             )
         except UsageLimitError:
@@ -127,15 +129,12 @@ async def process_job(job: PebbleJob, *, timeout_s: int, kb_path: str) -> None:
             span.set_attribute("pebble.success", outcome == "success")
 
 
-async def worker_loop(queue: JobQueue, *, timeout_s: int, kb_path: str) -> None:
+async def worker_loop(queue: JobQueue, *, kb_path: str) -> None:
     """Pop jobs from the queue and process them serially. Runs until cancelled."""
-    log.info(
-        "Pebble worker loop started (timeout_s=%d, kb_path=%s)",
-        timeout_s, kb_path,
-    )
+    log.info("Pebble worker loop started (kb_path=%s)", kb_path)
     while True:
         job = await queue.get()
         try:
-            await process_job(job, timeout_s=timeout_s, kb_path=kb_path)
+            await process_job(job, kb_path=kb_path)
         except Exception:
             log.exception("[%s] unhandled error in process_job", job.id)

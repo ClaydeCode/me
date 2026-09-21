@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     pebble_queue_max: int = 100
     pebble_host: str = ""
 
+    # Scheduler
+    scheduler_enabled: bool = False
+    scheduler_dir: str = "/tasks"
+    scheduler_interval_s: int = 30
+    scheduler_tz: str = "Europe/Berlin"
+    scheduler_timeout: int = 300
+
     # ntfy notifications (Pebble outcome feedback)
     ntfy_topic: str = "7yuau0vyes"
     ntfy_base_url: str = "https://ntfy.sh"

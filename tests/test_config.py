@@ -164,3 +164,14 @@ def test_fs_enabled_defaults_off():
     from clayde.config import Settings
     s = Settings(_env_file=None)
     assert s.fs_enabled is False
+
+
+def test_scheduler_settings_defaults(monkeypatch):
+    from clayde.config import _reset_settings, get_settings
+    _reset_settings()
+    s = get_settings()
+    assert s.scheduler_enabled is False
+    assert s.scheduler_dir == "/tasks"
+    assert s.scheduler_interval_s == 30
+    assert s.scheduler_tz == "Europe/Berlin"
+    assert s.scheduler_timeout == 300

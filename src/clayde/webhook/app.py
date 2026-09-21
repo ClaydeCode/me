@@ -12,8 +12,8 @@ from pydantic import BaseModel
 from clayde.config import get_settings
 from clayde.telemetry import get_tracer
 from clayde.webhook.auth import verify_bearer
-from clayde.webhook.notify import send_ntfy
-from clayde.webhook.queue import JobQueue, PebbleJob, QueueFullError
+from clayde.service.notify import send_ntfy
+from clayde.service.queue import JobQueue, Job, QueueFullError
 
 log = logging.getLogger("clayde.webhook")
 
@@ -39,7 +39,10 @@ def create_app(*, queue: JobQueue, expected_token: str) -> FastAPI:
         verify_bearer(authorization, expected=expected_token)
 
         job_id = str(uuid.uuid4())
-        job = PebbleJob(id=job_id, text=payload.text, timestamp=payload.timestamp)
+        job = Job(
+            id=job_id, text=payload.text, timestamp=payload.timestamp,
+            timeout_s=get_settings().pebble_timeout,
+        )
 
         tracer = get_tracer()
         with tracer.start_as_current_span("clayde.pebble.enqueue") as span:

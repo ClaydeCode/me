@@ -11,24 +11,26 @@ class QueueFullError(Exception):
 
 
 @dataclass(frozen=True)
-class PebbleJob:
+class Job:
     id: str
     text: str
     timestamp: int
+    origin: str = "pebble"
+    timeout_s: int = 300
 
 
 class JobQueue:
-    """Thin wrapper over ``asyncio.Queue[PebbleJob]`` with non-blocking enqueue."""
+    """Thin wrapper over ``asyncio.Queue[Job]`` with non-blocking enqueue."""
 
     def __init__(self, maxsize: int):
-        self._q: asyncio.Queue[PebbleJob] = asyncio.Queue(maxsize=maxsize)
+        self._q: asyncio.Queue[Job] = asyncio.Queue(maxsize=maxsize)
 
-    def enqueue(self, job: PebbleJob) -> None:
+    def enqueue(self, job: Job) -> None:
         """Non-blocking enqueue. Raises ``QueueFullError`` when full."""
         try:
             self._q.put_nowait(job)
         except asyncio.QueueFull as e:
             raise QueueFullError() from e
 
-    async def get(self) -> PebbleJob:
+    async def get(self) -> Job:
         return await self._q.get()

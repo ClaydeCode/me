@@ -41,8 +41,13 @@ def _parse_skill(path: Path) -> Skill:
     return Skill(name=name, description=desc, path=path)
 
 
+_INTRO = {
+    "pebble": "You are Clayde, executing a request from the user via a Pebble watch.",
+    "scheduler": "You are Clayde, executing a scheduled task.",
+}
+
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are Clayde, executing a request from the user via a Pebble watch.
+{intro}
 
 You have a hard wall-clock budget of {timeout_s} seconds for this
 entire request. If your process exceeds it, it is killed and the user gets
@@ -69,11 +74,14 @@ by the framework.
 """
 
 
-def build_system_prompt(skills: list[Skill], timeout_s: int = 300) -> str:
+def build_system_prompt(
+    skills: list[Skill], timeout_s: int = 300, origin: str = "pebble"
+) -> str:
     """Build the system prompt sent to the Claude CLI for a Pebble request.
 
     ``timeout_s`` is the hard wall-clock budget enforced by the runner; it is
-    surfaced in the prompt so Claude can scope work to fit.
+    surfaced in the prompt so Claude can scope work to fit. ``origin``
+    selects the opening framing line ("pebble" or "scheduler").
     """
     if not skills:
         skill_section = "Available skills: (none currently registered)"
@@ -87,12 +95,15 @@ def build_system_prompt(skills: list[Skill], timeout_s: int = 300) -> str:
             f"{files}"
         )
     return _SYSTEM_PROMPT_TEMPLATE.format(
+        intro=_INTRO.get(origin, _INTRO["pebble"]),
         skill_section=skill_section, timeout_s=timeout_s,
     )
 
 
-def build_user_prompt(text: str, timestamp: int) -> str:
+def build_user_prompt(text: str, timestamp: int, origin: str = "pebble") -> str:
     """Build the user prompt (passed to ``claude -p``) for a Pebble request."""
+    if origin == "scheduler":
+        return text
     return f"(timestamp {timestamp})\n{text}"
 
 
@@ -101,8 +112,17 @@ def _is_builtin(path: Path) -> bool:
     return "builtin" in {p.name for p in path.parents}
 
 
+def _is_skill_candidate(p: Path) -> bool:
+    # Directory skills use SKILL.md; the flat builtin format lives under builtin/.
+    return p.name == "SKILL.md" or p.parent.name == "builtin"
+
+
 def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
     """Recursively discover all skills under ``root``.
+
+    Only ``SKILL.md`` files (directory-style skills) and flat ``.md`` files
+    directly under a ``builtin/`` subdirectory are considered; other markdown
+    files (e.g. a skill's reference/example docs) are ignored before parsing.
 
     Returns a list ordered alphabetically by full path. Non-builtin skills
     (those NOT under a ``builtin/`` subdirectory) are processed before
@@ -113,7 +133,7 @@ def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
     """
     if not root.exists():
         return []
-    all_files = sorted(root.rglob("*.md"))
+    all_files = sorted(p for p in root.rglob("*.md") if _is_skill_candidate(p))
     # Non-builtin first so user skills override shipped builtins on name collision.
     files = [f for f in all_files if not _is_builtin(f)]
     files += [f for f in all_files if _is_builtin(f)]

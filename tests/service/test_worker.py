@@ -11,8 +11,8 @@ from clayde.claude import (
     InvocationTimeoutError,
     UsageLimitError,
 )
-from clayde.webhook import worker
-from clayde.webhook.queue import PebbleJob
+from clayde.service import worker
+from clayde.service.queue import Job
 
 
 @dataclass
@@ -36,12 +36,16 @@ def captured_ntfy(monkeypatch):
 @pytest.fixture
 def fake_skills(monkeypatch):
     monkeypatch.setattr(worker, "discover_skills", lambda root=None: [])
-    monkeypatch.setattr(worker, "build_system_prompt", lambda skills, timeout_s=300: "SYS")
-    monkeypatch.setattr(worker, "build_user_prompt", lambda text, ts: f"USER:{text}")
+    monkeypatch.setattr(
+        worker, "build_system_prompt", lambda skills, timeout_s=300, origin="pebble": "SYS"
+    )
+    monkeypatch.setattr(
+        worker, "build_user_prompt", lambda text, ts, origin="pebble": f"USER:{text}"
+    )
 
 
-def _job():
-    return PebbleJob(id="job-1", text="hello", timestamp=1000)
+def _job(timeout_s=10):
+    return Job(id="job-1", text="hello", timestamp=1000, timeout_s=timeout_s)
 
 
 @pytest.mark.asyncio
@@ -49,8 +53,8 @@ async def test_success_path_emits_one_success_ntfy(monkeypatch, captured_ntfy, f
     async def fake_invoke(**kwargs):
         return '```json\n{"title": "saved", "body": "wrote inbox/x.md", "success": true}\n```'
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].title == "saved"
     assert captured_ntfy[0].success is True
@@ -61,8 +65,8 @@ async def test_claude_reports_failure_via_json(monkeypatch, captured_ntfy, fake_
     async def fake_invoke(**kwargs):
         return '```json\n{"title": "could not", "body": "no calendar set up", "success": false}\n```'
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].success is False
     assert captured_ntfy[0].title == "could not"
@@ -73,8 +77,8 @@ async def test_parse_fallback_on_missing_json(monkeypatch, captured_ntfy, fake_s
     async def fake_invoke(**kwargs):
         return "I did things but forgot the JSON."
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].title == "Pebble: done (no summary)"
     assert captured_ntfy[0].success is True
@@ -85,11 +89,25 @@ async def test_timeout_emits_fail_ntfy(monkeypatch, captured_ntfy, fake_skills):
     async def fake_invoke(**kwargs):
         raise InvocationTimeoutError("ran 10s+")
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].title == "Pebble: timeout"
     assert captured_ntfy[0].success is False
+
+
+@pytest.mark.asyncio
+async def test_timeout_ntfy_body_reflects_the_jobs_own_timeout(
+    monkeypatch, captured_ntfy, fake_skills
+):
+    async def fake_invoke(**kwargs):
+        assert kwargs["timeout_s"] == 7200
+        raise InvocationTimeoutError("ran 7200s+")
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(timeout_s=7200), kb_path="/tmp")
+    assert len(captured_ntfy) == 1
+    assert captured_ntfy[0].body == "ran 7200s+"
 
 
 @pytest.mark.asyncio
@@ -97,8 +115,8 @@ async def test_usage_limit_emits_rate_limited_ntfy(monkeypatch, captured_ntfy, f
     async def fake_invoke(**kwargs):
         raise UsageLimitError("limit hit")
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].title == "Pebble: rate-limited"
     assert captured_ntfy[0].success is False
@@ -109,8 +127,8 @@ async def test_cli_invocation_error_emits_fail_ntfy(monkeypatch, captured_ntfy, 
     async def fake_invoke(**kwargs):
         raise CliInvocationError("stderr tail here")
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].title == "Pebble: failed"
     assert "stderr tail" in captured_ntfy[0].body
@@ -122,8 +140,8 @@ async def test_auth_error_emits_auth_ntfy(monkeypatch, captured_ntfy, fake_skill
     async def fake_invoke(**kwargs):
         raise RuntimeError("Claude CLI authentication failed")
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].title == "Pebble: auth error"
     assert captured_ntfy[0].success is False
@@ -134,9 +152,44 @@ async def test_unexpected_exception_emits_fail_ntfy(monkeypatch, captured_ntfy, 
     async def fake_invoke(**kwargs):
         raise ValueError("something weird")
 
-    monkeypatch.setattr(worker, "invoke_claude_pebble", fake_invoke)
-    await worker.process_job(_job(), timeout_s=10, kb_path="/tmp")
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
     assert len(captured_ntfy) == 1
     assert captured_ntfy[0].title == "Pebble: failed"
     assert "ValueError" in captured_ntfy[0].body
     assert captured_ntfy[0].success is False
+
+
+@pytest.mark.asyncio
+async def test_scheduler_success_does_not_notify(monkeypatch, captured_ntfy, fake_skills):
+    async def fake_invoke(**kwargs):
+        return '```json\n{"title": "saved", "body": "wrote inbox/x.md", "success": true}\n```'
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    job = Job(id="job-1", text="hello", timestamp=1000, origin="scheduler", timeout_s=10)
+    await worker.process_job(job, kb_path="/tmp")
+    assert len(captured_ntfy) == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_failure_notifies(monkeypatch, captured_ntfy, fake_skills):
+    async def fake_invoke(**kwargs):
+        raise InvocationTimeoutError("ran 10s+")
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    job = Job(id="job-1", text="hello", timestamp=1000, origin="scheduler", timeout_s=10)
+    await worker.process_job(job, kb_path="/tmp")
+    assert len(captured_ntfy) == 1
+    assert captured_ntfy[0].title == "Pebble: timeout"
+
+
+@pytest.mark.asyncio
+async def test_pebble_success_still_notifies(monkeypatch, captured_ntfy, fake_skills):
+    async def fake_invoke(**kwargs):
+        return '```json\n{"title": "saved", "body": "wrote inbox/x.md", "success": true}\n```'
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    job = Job(id="job-1", text="hello", timestamp=1000, origin="pebble", timeout_s=10)
+    await worker.process_job(job, kb_path="/tmp")
+    assert len(captured_ntfy) == 1
+    assert captured_ntfy[0].title == "saved"
