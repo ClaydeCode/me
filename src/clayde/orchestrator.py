@@ -6,7 +6,7 @@ import signal
 
 import uvicorn
 
-from clayde.config import DATA_DIR, get_settings, setup_logging
+from clayde.config import DATA_DIR, bootstrap_process_env, get_settings, setup_logging
 from clayde.freeshard.loop import run_cycle
 from clayde.scheduler.loop import scheduler_loop
 from clayde.webhook import JobQueue, create_app, worker_loop
@@ -42,6 +42,7 @@ async def _freeshard_loop(settings) -> None:
 async def _run_with_pebble() -> None:
     """Async entry point that runs the Pebble webhook and worker."""
     setup_logging()
+    bootstrap_process_env()
     settings = get_settings()
     log.info(
         "Starting Clayde with Pebble webhook (port=%d, queue_max=%d)",

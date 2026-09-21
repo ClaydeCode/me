@@ -6,7 +6,6 @@ matching handler. No local state — all phase input comes from GitHub.
 """
 import concurrent.futures
 import logging
-import os
 
 from clayde.claude import is_claude_available
 from clayde.config import get_github_client
@@ -176,11 +175,6 @@ def run_cycle(settings) -> int:
         check_disk_and_alert(settings)
     except Exception:
         log.warning("Disk guard check failed — continuing")
-    if settings.github_token:
-        # The container's git credential helper is `!gh auth git-credential`,
-        # which reads GH_TOKEN from the environment; without it, branch pushes
-        # in steps._push_branch fail with exit 128.
-        os.environ["GH_TOKEN"] = settings.github_token
     if is_claude_available():
         g = get_github_client()
         return tick(g, settings)

@@ -27,6 +27,10 @@ services:
     image: ghcr.io/claydecode/me:main
     restart: unless-stopped
     user: "1000:1000"
+    # The host's docker group, so the mounted socket below is usable as uid
+    # 1000. Must match `getent group docker` on the host.
+    group_add:
+      - "${DOCKER_GID:-111}"
     networks: [internal]
     expose:
       - "8080"
@@ -57,6 +61,11 @@ services:
       # Scheduled-task markdown files (cron/at frontmatter). Read-write: the
       # scheduler moves fired one-off files into a done/ subdirectory.
       - ~/clayde-tasks:/tasks
+      # Docker CLI access for agent runs that need to resolve images, e.g. the
+      # app-repository update pass and its `docker compose pull --dry-run`.
+      # Full socket: an agent in this container can control every container on
+      # the host. Deliberate, and the reason the whitelist above matters.
+      - /var/run/docker.sock:/var/run/docker.sock
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.clayde.rule=Host(`${CLAYDE_PEBBLE_HOST}`) && PathPrefix(`/webhook`)"
