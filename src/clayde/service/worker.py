@@ -48,7 +48,8 @@ async def _notify(*, title: str, body: str, success: bool) -> None:
 async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
     """Process a single Pebble job. Emits exactly one ntfy notification."""
     tracer = get_tracer()
-    with tracer.start_as_current_span("clayde.pebble.process") as span:
+    with tracer.start_as_current_span("clayde.job.process") as span:
+        span.set_attribute("job.origin", job.origin)
         span.set_attribute("pebble.job_id", job.id)
         span.set_attribute("pebble.timestamp", job.timestamp)
         span.set_attribute("pebble.text", job.text)

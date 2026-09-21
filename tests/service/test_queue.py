@@ -34,3 +34,13 @@ async def test_get_blocks_until_enqueued():
     asyncio.create_task(producer())
     got = await asyncio.wait_for(q.get(), timeout=1.0)
     assert got == job
+
+
+def test_job_origin_defaults_to_pebble():
+    job = Job(id="1", text="hi", timestamp=0)
+    assert job.origin == "pebble"
+
+
+def test_job_origin_can_be_scheduler():
+    job = Job(id="1", text="hi", timestamp=0, origin="scheduler")
+    assert job.origin == "scheduler"

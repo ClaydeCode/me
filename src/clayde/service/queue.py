@@ -15,6 +15,7 @@ class Job:
     id: str
     text: str
     timestamp: int
+    origin: str = "pebble"
 
 
 class JobQueue:
