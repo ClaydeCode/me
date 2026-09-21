@@ -24,3 +24,6 @@ docker-compose.override.yml
 
 # IDE
 .idea
+
+# SDD scratch
+.superpowers/
