@@ -73,19 +73,23 @@ def run_tick(queue: JobQueue, *, tasks_dir: Path, state_path: Path,
         if scheduled is None:
             continue
 
-        note = lateness_note(scheduled, now)
-        text = f"{note}\n{task.prompt}" if note else task.prompt
-        job = Job(id=str(uuid.uuid4()), text=text,
-                  timestamp=int(now.timestamp()), origin="scheduler")
         try:
-            queue.enqueue(job)
-        except QueueFullError:
-            log.warning("Queue full — deferring task %s", key)
+            note = lateness_note(scheduled, now)
+            text = f"{note}\n{task.prompt}" if note else task.prompt
+            job = Job(id=str(uuid.uuid4()), text=text,
+                      timestamp=int(now.timestamp()), origin="scheduler")
+            try:
+                queue.enqueue(job)
+            except QueueFullError:
+                log.warning("Queue full — deferring task %s", key)
+                continue
+            if task.cron is not None:
+                set_last_fired(state, key, scheduled)
+            else:
+                _move_to_done(task.path, now)
+        except Exception:
+            log.exception("Scheduled task failed, skipping: %s", task.path)
             continue
-        if task.cron is not None:
-            set_last_fired(state, key, scheduled)
-        else:
-            _move_to_done(task.path, now)
 
     save_state(state_path, state)
 
