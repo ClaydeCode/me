@@ -66,16 +66,16 @@ def _write_skill(path: Path, name: str, description: str) -> Path:
 
 
 def test_discover_recursive_alpha_order(tmp_path):
-    _write_skill(tmp_path / "personal" / "b.md", "b-skill", "B")
-    _write_skill(tmp_path / "personal" / "a.md", "a-skill", "A")
-    _write_skill(tmp_path / "shared" / "z.md", "z-skill", "Z")
+    _write_skill(tmp_path / "personal" / "b-skill" / "SKILL.md", "b-skill", "B")
+    _write_skill(tmp_path / "personal" / "a-skill" / "SKILL.md", "a-skill", "A")
+    _write_skill(tmp_path / "shared" / "z-skill" / "SKILL.md", "z-skill", "Z")
     skills = discover_skills(tmp_path)
     assert [s.name for s in skills] == ["a-skill", "b-skill", "z-skill"]
 
 
 def test_discover_dedup_first_wins(tmp_path, caplog):
-    a = _write_skill(tmp_path / "a" / "first.md", "dup", "first one")
-    _write_skill(tmp_path / "b" / "second.md", "dup", "second one")
+    a = _write_skill(tmp_path / "a" / "dup" / "SKILL.md", "dup", "first one")
+    _write_skill(tmp_path / "b" / "dup" / "SKILL.md", "dup", "second one")
     with caplog.at_level("WARNING", logger="clayde.webhook"):
         skills = discover_skills(tmp_path)
     assert len(skills) == 1
@@ -84,8 +84,9 @@ def test_discover_dedup_first_wins(tmp_path, caplog):
 
 
 def test_discover_skips_malformed(tmp_path, caplog):
-    _write_skill(tmp_path / "ok.md", "ok-skill", "fine")
-    (tmp_path / "broken.md").write_text("not a skill file\n")
+    _write_skill(tmp_path / "ok-skill" / "SKILL.md", "ok-skill", "fine")
+    (tmp_path / "broken" / "SKILL.md").parent.mkdir(parents=True)
+    (tmp_path / "broken" / "SKILL.md").write_text("not a skill file\n")
     with caplog.at_level("WARNING", logger="clayde.webhook"):
         skills = discover_skills(tmp_path)
     assert [s.name for s in skills] == ["ok-skill"]
@@ -95,6 +96,27 @@ def test_discover_skips_malformed(tmp_path, caplog):
 def test_discover_missing_root(tmp_path):
     missing = tmp_path / "does-not-exist"
     assert discover_skills(missing) == []
+
+
+def test_directory_skill_matched(tmp_path):
+    _write_skill(tmp_path / "kb" / "ntfy-ping" / "SKILL.md", "ntfy-ping", "send a push")
+    names = {s.name for s in discover_skills(tmp_path)}
+    assert "ntfy-ping" in names
+
+
+def test_reference_md_ignored_without_warning(tmp_path, caplog):
+    _write_skill(tmp_path / "kb" / "foo" / "SKILL.md", "foo", "the foo skill")
+    (tmp_path / "kb" / "foo" / "references").mkdir(parents=True)
+    (tmp_path / "kb" / "foo" / "references" / "notes.md").write_text("# just notes\n")
+    names = {s.name for s in discover_skills(tmp_path)}
+    assert names == {"foo"}
+    assert "Failed to parse skill" not in caplog.text
+
+
+def test_flat_builtin_md_matched(tmp_path):
+    _write_skill(tmp_path / "builtin" / "ping.md", "ping", "health check")
+    names = {s.name for s in discover_skills(tmp_path)}
+    assert "ping" in names
 
 
 from clayde.service.skills import build_system_prompt, build_user_prompt
@@ -167,7 +189,8 @@ def test_discovers_builtin_alongside_host(tmp_path):
     (tmp_path / "builtin" / "ping.md").write_text(
         "---\nname: ping\ndescription: Health check.\n---\n\npong\n"
     )
-    (tmp_path / "personal" / "add-note.md").write_text(
+    (tmp_path / "personal" / "add-note").mkdir()
+    (tmp_path / "personal" / "add-note" / "SKILL.md").write_text(
         "---\nname: add-note\ndescription: Save a note.\n---\n\n...\n"
     )
     skills = discover_skills(tmp_path)
@@ -183,7 +206,8 @@ def test_discover_personal_overrides_builtin(tmp_path, caplog):
     (tmp_path / "builtin" / "voice-command.md").write_text(
         "---\nname: voice-command\ndescription: Builtin version.\n---\n\nBuiltin body.\n"
     )
-    (tmp_path / "personal" / "voice-command.md").write_text(
+    (tmp_path / "personal" / "voice-command").mkdir()
+    (tmp_path / "personal" / "voice-command" / "SKILL.md").write_text(
         "---\nname: voice-command\ndescription: Personal override.\n---\n\nCustom body.\n"
     )
     with caplog.at_level("WARNING", logger="clayde.webhook"):

@@ -112,8 +112,17 @@ def _is_builtin(path: Path) -> bool:
     return "builtin" in {p.name for p in path.parents}
 
 
+def _is_skill_candidate(p: Path) -> bool:
+    # Directory skills use SKILL.md; the flat builtin format lives under builtin/.
+    return p.name == "SKILL.md" or p.parent.name == "builtin"
+
+
 def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
     """Recursively discover all skills under ``root``.
+
+    Only ``SKILL.md`` files (directory-style skills) and flat ``.md`` files
+    directly under a ``builtin/`` subdirectory are considered; other markdown
+    files (e.g. a skill's reference/example docs) are ignored before parsing.
 
     Returns a list ordered alphabetically by full path. Non-builtin skills
     (those NOT under a ``builtin/`` subdirectory) are processed before
@@ -124,7 +133,7 @@ def discover_skills(root: Path = SKILLS_ROOT) -> list[Skill]:
     """
     if not root.exists():
         return []
-    all_files = sorted(root.rglob("*.md"))
+    all_files = sorted(p for p in root.rglob("*.md") if _is_skill_candidate(p))
     # Non-builtin first so user skills override shipped builtins on name collision.
     files = [f for f in all_files if not _is_builtin(f)]
     files += [f for f in all_files if _is_builtin(f)]
