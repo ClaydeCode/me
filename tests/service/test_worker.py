@@ -140,3 +140,38 @@ async def test_unexpected_exception_emits_fail_ntfy(monkeypatch, captured_ntfy, 
     assert captured_ntfy[0].title == "Pebble: failed"
     assert "ValueError" in captured_ntfy[0].body
     assert captured_ntfy[0].success is False
+
+
+@pytest.mark.asyncio
+async def test_scheduler_success_does_not_notify(monkeypatch, captured_ntfy, fake_skills):
+    async def fake_invoke(**kwargs):
+        return '```json\n{"title": "saved", "body": "wrote inbox/x.md", "success": true}\n```'
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    job = Job(id="job-1", text="hello", timestamp=1000, origin="scheduler")
+    await worker.process_job(job, timeout_s=10, kb_path="/tmp")
+    assert len(captured_ntfy) == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_failure_notifies(monkeypatch, captured_ntfy, fake_skills):
+    async def fake_invoke(**kwargs):
+        raise InvocationTimeoutError("ran 10s+")
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    job = Job(id="job-1", text="hello", timestamp=1000, origin="scheduler")
+    await worker.process_job(job, timeout_s=10, kb_path="/tmp")
+    assert len(captured_ntfy) == 1
+    assert captured_ntfy[0].title == "Pebble: timeout"
+
+
+@pytest.mark.asyncio
+async def test_pebble_success_still_notifies(monkeypatch, captured_ntfy, fake_skills):
+    async def fake_invoke(**kwargs):
+        return '```json\n{"title": "saved", "body": "wrote inbox/x.md", "success": true}\n```'
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    job = Job(id="job-1", text="hello", timestamp=1000, origin="pebble")
+    await worker.process_job(job, timeout_s=10, kb_path="/tmp")
+    assert len(captured_ntfy) == 1
+    assert captured_ntfy[0].title == "saved"

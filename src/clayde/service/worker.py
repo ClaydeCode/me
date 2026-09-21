@@ -76,9 +76,10 @@ async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
                 outcome = "success"
             else:
                 outcome = "claude_fail"
-            await _notify(
-                title=payload.title, body=payload.body, success=payload.success,
-            )
+            if job.origin != "scheduler":
+                await _notify(
+                    title=payload.title, body=payload.body, success=payload.success,
+                )
             log.info("[%s] processed outcome=%s", job.id, outcome)
         except InvocationTimeoutError:
             outcome = "timeout"
