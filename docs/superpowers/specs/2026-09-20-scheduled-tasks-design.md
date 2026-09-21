@@ -1,7 +1,13 @@
 # Scheduled Tasks — File-Driven Scheduler — Design
 
-**Date:** 2026-09-20
+**Date:** 2026-09-20 (revised 2026-09-21)
 **Status:** Proposed — awaiting review
+
+**Changes in this revision:** dropped the per-task `notify` field in favour of
+prompt-driven notification plus framework failure-notify; mount the whole KB
+skill library and adjust discovery to the directory-based `SKILL.md` format;
+switch the shared runner from `--dangerously-skip-permissions` to auto
+permission mode.
 
 ## Goal
 
@@ -10,7 +16,7 @@ interactive session or the Pebble watch. Each task is one markdown file in a
 host-mounted directory: frontmatter says *when* to run (a one-off timestamp or
 a recurring cron expression), the body is the prompt. Due tasks are dispatched
 through the existing job pipeline — a fresh Claude CLI session with `/skills/`
-available, cwd = KB — and notify (or not) per the task's own policy.
+available, cwd = KB.
 
 Primary uses: reminders to self, recurring maintenance prompts, and the
 credential keep-warm ping that motivated this work (a recurring task whose CLI
@@ -27,11 +33,12 @@ disuse).
 - **Backfilling missed occurrences.** After downtime an overdue task fires
   once, never once-per-missed-tick.
 - **Authoring tasks from other devices.** The task directory is a dedicated
-  host dir, not the synced knowledge base. Tasks are created on the VM. (A
-  future voice/webhook path that writes task files is out of scope.)
+  host dir, not the synced knowledge base. Tasks are created on the VM.
 - **Sub-minute schedules.** Cron granularity is one minute.
-- **A separate reminders feature.** A reminder is just a task; delivery is the
-  normal outcome ntfy carrying Claude's summary.
+- **A separate reminders feature.** A reminder is just a task whose prompt asks
+  the agent to notify.
+- **Per-task silence-on-failure.** Scheduler failures always notify (below).
+  There is no knob to silence a failing task.
 
 ## Refactor: neutral `service/` package
 
@@ -65,12 +72,10 @@ class Job:
     text: str            # the prompt
     timestamp: int        # epoch seconds at enqueue
     origin: str = "pebble"          # "pebble" | "scheduler"
-    notify: str = "always"          # "always" | "on-failure" | "never" | "agent"
 ```
 
-`origin` selects prompt framing. `notify` carries the per-job notification
-policy (§ Notification policy). Both default to today's Pebble behaviour, so
-`webhook/app.py` constructs `Job` unchanged.
+`origin` selects prompt framing and the success-notification behaviour. It
+defaults to Pebble, so `webhook/app.py` constructs `Job` unchanged.
 
 ## Task file format
 
@@ -84,7 +89,6 @@ cron: "0 8 * * *"        # recurring, 5-field cron
 # at: 2026-09-21T08:00    # one-off, ISO-8601 local datetime (mutually exclusive with cron)
 tz: Europe/Berlin         # optional; default CLAYDE_SCHEDULER_TZ
 enabled: true             # optional; default true
-notify: always            # optional; default "always" (see Notification policy)
 title: keep-warm          # optional; label for logs only
 ---
 Run a trivial health check and confirm you are alive.
@@ -98,12 +102,10 @@ Rules:
 - `at` is an ISO-8601 local datetime, interpreted in `tz`.
 - `tz` is an IANA name resolved via stdlib `zoneinfo`; default from
   `CLAYDE_SCHEDULER_TZ`.
-- `notify` ∈ {`always`, `on-failure`, `never`, `agent`}; anything else → the
-  file is treated as malformed.
 - `enabled: false` parks a task without deleting it.
-- Malformed files (missing/both schedule keys, bad cron, unknown `notify`,
-  unterminated frontmatter) are logged at WARNING and skipped — same policy as
-  skill discovery. No ntfy on a malformed file (would spam every tick).
+- Malformed files (missing/both schedule keys, bad cron, unterminated
+  frontmatter) are logged at WARNING and skipped — same policy as skill
+  discovery. No ntfy on a malformed file (would spam every tick).
 
 ### Directory & state layout
 
@@ -132,9 +134,9 @@ A new `scheduler_loop()` coroutine (in `scheduler/loop.py`) joins the existing
 
 1. Discovers and parses `/tasks/*.md` (`scheduler/tasks.py`); skips `done/`.
 2. Evaluates due-ness (below).
-3. For each due task, builds a `Job(origin="scheduler", notify=<task.notify>,
-   text=<prompt>)` and enqueues it into the shared `JobQueue`. If the queue is
-   full, log and leave dedup uncommitted so it retries next tick.
+3. For each due task, builds a `Job(origin="scheduler", text=<prompt>)` and
+   enqueues it into the shared `JobQueue`. If the queue is full, log and leave
+   dedup uncommitted so it retries next tick.
 4. Commits dedup **at enqueue time**: recurring → write `last_fired_at`;
    one-off → move file to `done/<epoch>-<name>`.
 
@@ -156,42 +158,74 @@ A new `scheduler_loop()` coroutine (in `scheduler/loop.py`) joins the existing
   So Claude can phrase a late reminder appropriately. Applies to both one-off
   overdue firing and a late recurring tick.
 
-## Notification policy
+## Notification
 
-`notify` on the `Job` controls whether the worker emits an ntfy for that job's
-outcome. Pebble jobs are always `always`. Scheduler jobs take the value from
-frontmatter.
+No per-task notify field. Behaviour is by origin:
 
-| Value | Success | Failure (timeout / CLI / auth / worker error) |
-|-------|---------|-----------------------------------------------|
-| `always` (default) | notify | notify |
-| `on-failure` | silent | notify |
-| `never` | silent | silent |
-| `agent` | Claude decides (see below) | notify |
+- **Scheduler job, success:** the framework emits **no** ntfy. Any intentional
+  notification is the task's own responsibility — its prompt asks the agent to
+  notify (e.g. "notify me: ..."), which the agent does via the mounted
+  `ntfy-ping` skill. keep-warm, whose prompt says nothing about notifying, is
+  therefore silent on success.
+- **Scheduler job, failure** (timeout, usage limit, CLI error, auth error,
+  worker crash): the framework emits its ntfy, because a run that didn't finish
+  cannot self-report. keep-warm thus stays silent day-to-day but shouts when
+  the login lapses (an auth error) — the one signal it exists to surface.
+- **Pebble job:** unchanged — framework ntfy on every outcome.
 
-`agent` semantics: the invoked Claude may include an optional `"notify"` bool
-in its final JSON block:
+Implementation: `process_job` skips the **success-branch** `_notify` when
+`job.origin == "scheduler"`; every failure branch notifies as it does today.
+No changes to `Job`, `NotificationPayload`, or `extract_notification_payload`
+for notification purposes.
 
-```json
-{"title": "...", "body": "...", "success": true, "notify": false}
+Dependency: an intentional notification needs the `ntfy-ping` skill reachable
+(satisfied by the whole-library mount below) and pointed at the right topic —
+`ntfy-ping`'s topic must be reconciled with `CLAYDE_NTFY_TOPIC`, or the task
+prompt must target the correct topic. Verify during implementation.
+
+## Skill exposure
+
+Mount the whole personal skill library so scheduled tasks and Pebble commands
+can use it. Add to `docker-compose.yml`, `clayde` service:
+
+```
+- ~/knowledge_base/skills:/skills/kb:ro
 ```
 
-- On success, the worker honours `payload.notify`.
-- If the run succeeds but omits the field, default to **notify** (a lost
-  decision must not silence the user).
-- If the run fails before producing JSON, **notify** regardless — the agent
-  can't decide if it never finished.
+**Discovery change** (`service/skills.py`): KB skills are directory-based
+(`<skill>/SKILL.md` plus reference/example `.md` files); discovery currently
+treats every `*.md` under `/skills` as a skill candidate. Change
+`discover_skills` to consider only `SKILL.md` files and flat top-level `*.md`
+(the builtin `ping.md` format), silently ignoring other `.md`. Without this,
+discovery logs the ~47 reference files as malformed on every job tick. Name
+de-duplication and builtin-override ordering are unchanged.
 
-The `"notify"` field is documented in the system prompt **only** when the job's
-policy is `agent`; for other policies any `notify` the model emits is ignored.
+**Safety:** each skill dir carries its own credentials (api-email, api-gcal,
+api-azure, api-ionos, and others), so the whole tree becoming reachable is a
+real capability grant. It is gated by the auto permission mode (below), not by
+omission. This is an accepted, classifier-mediated risk, not a hard boundary.
 
-### Worker changes
+## Permission mode
 
-`process_job` is refactored so each outcome branch produces a
-`(title, body, success)` triple and a single guarded notify runs at the end,
-applying the policy table, instead of the scattered `_notify` calls it has now.
-`extract_notification_payload` / `NotificationPayload` gain an optional
-`notify: bool | None` parsed from the JSON tail.
+Replace `--dangerously-skip-permissions` in the shared runner
+(`service/runner.py`, `invoke_claude`) with:
+
+```
+--permission-mode auto --permission-prompts none
+```
+
+Auto mode's classifier auto-approves safe actions and denies dangerous ones
+(credential reads, destructive commands); `--permission-prompts none` means any
+action the classifier would escalate to a human is auto-denied, since headless
+runs have no one to ask. Verified against Claude CLI 2.1.278
+(`--permission-mode` choices include `auto`; `--permission-prompts` includes
+`none`).
+
+Applies to **both** scheduler and Pebble jobs (shared runner) — a hardening of
+the existing webhook, at the cost that some commands that ran under
+skip-permissions may now be denied. It is a classifier, not a sandbox: it
+lowers blast radius but does not hard-guarantee against a mutating action
+disguised as benign.
 
 ## Prompt framing
 
@@ -200,8 +234,6 @@ applying the policy table, instead of the scattered `_notify` calls it has now.
 - **System prompt** opening line: "executing a scheduled task" for
   `origin="scheduler"`, unchanged "request from a Pebble watch" for `pebble`.
   The skills catalogue, timeout budget, and JSON-tail requirement are shared.
-  When policy is `agent`, the scheduler system prompt additionally documents
-  the optional `"notify"` field.
 - **User prompt:** scheduler builds `<lateness note?>\n<body>` rather than the
   Pebble `(timestamp N)\n<text>`.
 
@@ -215,8 +247,8 @@ applying the policy table, instead of the scattered `_notify` calls it has now.
 | `CLAYDE_SCHEDULER_TZ` | `Europe/Berlin` | Default timezone for tasks |
 | `CLAYDE_SCHEDULER_TIMEOUT` | `300` | Per-run wall-clock budget (mirrors `pebble_timeout`) |
 
-`docker-compose.yml`: add `- ~/clayde-tasks:/tasks` (read-write) to the
-`clayde` service.
+`docker-compose.yml`: add `- ~/clayde-tasks:/tasks` (read-write) and
+`- ~/knowledge_base/skills:/skills/kb:ro` to the `clayde` service.
 
 ## Dependency
 
@@ -231,10 +263,10 @@ src/clayde/
   service/            # NEW — shared job execution (moved from webhook/)
     __init__.py       #   re-exports Job, JobQueue, QueueFullError, worker_loop
     queue.py          #   Job, JobQueue, QueueFullError
-    worker.py         #   worker_loop, process_job (+ notify policy)
-    runner.py         #   invoke_claude, extract_notification_payload
-    notify.py         #   send_ntfy, NotificationPayload (+ optional notify field)
-    skills.py         #   discover_skills, build_system_prompt(origin,...), build_user_prompt
+    worker.py         #   worker_loop, process_job (scheduler success = no ntfy)
+    runner.py         #   invoke_claude (auto permission mode), extract_notification_payload
+    notify.py         #   send_ntfy, NotificationPayload
+    skills.py         #   discover_skills (SKILL.md-aware), build_system_prompt(origin,...), build_user_prompt
   webhook/
     __init__.py
     app.py            #   HTTP endpoint only (imports Job/JobQueue from service)
@@ -253,18 +285,24 @@ tests/
 
 ## Testing
 
-`uv run pytest`. New coverage:
+`uv run pytest`. New / changed coverage:
 
 - **tasks.py:** valid cron / valid at / both keys (reject) / neither (reject) /
-  bad cron / unknown notify / bad tz / `enabled: false` / body extraction.
+  bad cron / bad tz / `enabled: false` / body extraction.
 - **state.py:** load/save round-trip, missing file, dedup key by relative path.
 - **loop.py:** recurring first-encounter baseline (no fire); recurring fires
   once per occurrence; recurring single-fire after simulated downtime; one-off
   fires and moves to `done/`; one-off not re-fired; lateness annotation present
   when late and absent when on time; queue-full leaves dedup uncommitted.
-- **worker.py:** notify policy table — each of `always` / `on-failure` /
-  `never` / `agent` × (success / failure) asserts notify-called-or-not;
-  `agent` success with `notify:false`, with field omitted, and failure path.
+- **worker.py:** `origin="scheduler"` success emits **no** ntfy; each scheduler
+  failure branch (timeout / usage limit / CLI error / auth / worker crash)
+  **does** emit ntfy; `origin="pebble"` still notifies on every outcome.
+- **skills.py discovery:** `SKILL.md` under a skill dir is matched; reference
+  `.md` files are ignored without a WARNING; flat builtin `ping.md` matched;
+  name collision de-dup and builtin-override ordering unchanged.
+- **runner.py:** the CLI argv contains `--permission-mode auto` and
+  `--permission-prompts none`, and no longer contains
+  `--dangerously-skip-permissions`.
 - **Regression:** moved Pebble tests still pass under `tests/service/`;
   `origin="pebble"` framing and always-notify unchanged.
 
