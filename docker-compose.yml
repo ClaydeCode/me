@@ -11,6 +11,8 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=internal
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
       - --entrypoints.websecure.address=:443
       - --entrypoints.web.address=:80
       - --certificatesresolvers.le.acme.email=${CLAYDE_GIT_EMAIL}
@@ -23,6 +25,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/letsencrypt:/letsencrypt
+      # Hand-written routes for host services that are not containers here
+      # (the /board and /walk backends on the host).
+      - ./traefik-dynamic:/dynamic:ro
   clayde:
     image: ghcr.io/claydecode/me:main
     restart: unless-stopped
