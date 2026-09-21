@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,11 @@ from croniter import croniter
 
 log = logging.getLogger("clayde.scheduler")
 
+MAX_TIMEOUT_S = 14400  # 4 hours
+
+_TIMEOUT_RE = re.compile(r"^\s*(\d+)\s*([hms]?)\s*$")
+_TIMEOUT_UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600}
+
 
 @dataclass(frozen=True)
 class ScheduledTask:
@@ -19,9 +25,10 @@ class ScheduledTask:
     prompt: str
     cron: str | None
     at: datetime | None
+    title: str | None
+    timeout_s: int
     tz: ZoneInfo
     enabled: bool
-    title: str | None
 
 
 def _split_frontmatter(text: str) -> tuple[dict, str]:
@@ -37,7 +44,30 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
     return data, body
 
 
-def parse_task_file(path: Path, default_tz: str) -> ScheduledTask:
+def _parse_timeout(value, default_s: int) -> int:
+    if value is None:
+        requested = default_s
+    elif isinstance(value, int):
+        requested = value
+    elif isinstance(value, str):
+        m = _TIMEOUT_RE.match(value)
+        if not m:
+            raise ValueError(f"bad timeout {value!r}")
+        amount, unit = m.groups()
+        requested = int(amount) * _TIMEOUT_UNIT_SECONDS[unit]
+    else:
+        raise ValueError(f"bad timeout {value!r}")
+
+    if requested > MAX_TIMEOUT_S:
+        log.warning(
+            "Requested timeout %ds exceeds the %ds cap — clamping",
+            requested, MAX_TIMEOUT_S,
+        )
+        requested = MAX_TIMEOUT_S
+    return max(1, requested)
+
+
+def parse_task_file(path: Path, default_tz: str, default_timeout_s: int) -> ScheduledTask:
     data, body = _split_frontmatter(path.read_text())
 
     cron = data.get("cron")
@@ -63,19 +93,21 @@ def parse_task_file(path: Path, default_tz: str) -> ScheduledTask:
 
     enabled = bool(data.get("enabled", True))
     title = data.get("title")
+    timeout_s = _parse_timeout(data.get("timeout"), default_timeout_s)
     return ScheduledTask(
         path=path, prompt=body, cron=cron, at=at, tz=tz,
         enabled=enabled, title=str(title) if title is not None else None,
+        timeout_s=timeout_s,
     )
 
 
-def discover_tasks(root: Path, default_tz: str) -> list[ScheduledTask]:
+def discover_tasks(root: Path, default_tz: str, default_timeout_s: int) -> list[ScheduledTask]:
     if not root.exists():
         return []
     tasks: list[ScheduledTask] = []
     for p in sorted(root.glob("*.md")):
         try:
-            tasks.append(parse_task_file(p, default_tz))
+            tasks.append(parse_task_file(p, default_tz, default_timeout_s))
         except Exception as e:
             log.warning("Skipping malformed task file %s: %s", p, e)
     return tasks

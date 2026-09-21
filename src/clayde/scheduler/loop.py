@@ -53,9 +53,9 @@ def _move_to_done(path: Path, now: datetime) -> None:
 
 
 def run_tick(queue: JobQueue, *, tasks_dir: Path, state_path: Path,
-             default_tz: str, now: datetime) -> None:
+             default_tz: str, now: datetime, default_timeout_s: int) -> None:
     state = load_state(state_path)
-    for task in discover_tasks(tasks_dir, default_tz):
+    for task in discover_tasks(tasks_dir, default_tz, default_timeout_s):
         if not task.enabled:
             continue
         key = task.path.name
@@ -77,7 +77,8 @@ def run_tick(queue: JobQueue, *, tasks_dir: Path, state_path: Path,
             note = lateness_note(scheduled, now)
             text = f"{note}\n{task.prompt}" if note else task.prompt
             job = Job(id=str(uuid.uuid4()), text=text,
-                      timestamp=int(now.timestamp()), origin="scheduler")
+                      timestamp=int(now.timestamp()), origin="scheduler",
+                      timeout_s=task.timeout_s)
             try:
                 queue.enqueue(job)
             except QueueFullError:
@@ -95,12 +96,14 @@ def run_tick(queue: JobQueue, *, tasks_dir: Path, state_path: Path,
 
 
 async def scheduler_loop(queue: JobQueue, *, tasks_dir: str, state_path: str,
-                          default_tz: str, interval_s: int) -> None:
+                          default_tz: str, interval_s: int,
+                          default_timeout_s: int) -> None:
     log.info("Scheduler loop started (dir=%s, interval=%ds)", tasks_dir, interval_s)
     while True:
         try:
             run_tick(queue, tasks_dir=Path(tasks_dir), state_path=Path(state_path),
-                     default_tz=default_tz, now=datetime.now(timezone.utc))
+                     default_tz=default_tz, now=datetime.now(timezone.utc),
+                     default_timeout_s=default_timeout_s)
         except Exception:
             log.exception("Scheduler tick failed — continuing")
         await asyncio.sleep(interval_s)

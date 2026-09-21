@@ -45,7 +45,7 @@ async def _notify(*, title: str, body: str, success: bool) -> None:
     )
 
 
-async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
+async def process_job(job: Job, *, kb_path: str) -> None:
     """Process a single Pebble job. Emits exactly one ntfy notification."""
     tracer = get_tracer()
     with tracer.start_as_current_span("clayde.job.process") as span:
@@ -57,7 +57,7 @@ async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
 
         skills = discover_skills(SKILLS_ROOT)
         span.set_attribute("pebble.skills_available", len(skills))
-        system_prompt = build_system_prompt(skills, timeout_s=timeout_s, origin=job.origin)
+        system_prompt = build_system_prompt(skills, timeout_s=job.timeout_s, origin=job.origin)
         user_text = build_user_prompt(job.text, job.timestamp, origin=job.origin)
 
         t0 = time.monotonic()
@@ -67,7 +67,7 @@ async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
                 system_prompt=system_prompt,
                 user_text=user_text,
                 cwd=kb_path,
-                timeout_s=timeout_s,
+                timeout_s=job.timeout_s,
             )
             payload = extract_notification_payload(output)
             if payload.title == _FALLBACK_TITLE:
@@ -86,7 +86,7 @@ async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
             log.warning("[%s] timeout", job.id)
             await _notify(
                 title="Pebble: timeout",
-                body=f"ran {timeout_s}s+",
+                body=f"ran {job.timeout_s}s+",
                 success=False,
             )
         except UsageLimitError:
@@ -129,15 +129,12 @@ async def process_job(job: Job, *, timeout_s: int, kb_path: str) -> None:
             span.set_attribute("pebble.success", outcome == "success")
 
 
-async def worker_loop(queue: JobQueue, *, timeout_s: int, kb_path: str) -> None:
+async def worker_loop(queue: JobQueue, *, kb_path: str) -> None:
     """Pop jobs from the queue and process them serially. Runs until cancelled."""
-    log.info(
-        "Pebble worker loop started (timeout_s=%d, kb_path=%s)",
-        timeout_s, kb_path,
-    )
+    log.info("Pebble worker loop started (kb_path=%s)", kb_path)
     while True:
         job = await queue.get()
         try:
-            await process_job(job, timeout_s=timeout_s, kb_path=kb_path)
+            await process_job(job, kb_path=kb_path)
         except Exception:
             log.exception("[%s] unhandled error in process_job", job.id)

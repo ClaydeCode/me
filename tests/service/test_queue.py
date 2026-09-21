@@ -44,3 +44,13 @@ def test_job_origin_defaults_to_pebble():
 def test_job_origin_can_be_scheduler():
     job = Job(id="1", text="hi", timestamp=0, origin="scheduler")
     assert job.origin == "scheduler"
+
+
+def test_job_timeout_s_defaults_to_300():
+    job = Job(id="1", text="hi", timestamp=0)
+    assert job.timeout_s == 300
+
+
+def test_job_timeout_s_can_be_set():
+    job = Job(id="1", text="hi", timestamp=0, timeout_s=7200)
+    assert job.timeout_s == 7200

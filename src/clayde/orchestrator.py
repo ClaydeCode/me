@@ -57,11 +57,7 @@ async def _run_with_pebble() -> None:
     server = uvicorn.Server(config)
 
     async def worker_task() -> None:
-        await worker_loop(
-            queue,
-            timeout_s=settings.pebble_timeout,
-            kb_path=settings.kb_path,
-        )
+        await worker_loop(queue, kb_path=settings.kb_path)
 
     async def scheduler_task() -> None:
         await scheduler_loop(
@@ -70,6 +66,7 @@ async def _run_with_pebble() -> None:
             state_path=_scheduler_state_path(),
             default_tz=settings.scheduler_tz,
             interval_s=settings.scheduler_interval_s,
+            default_timeout_s=settings.scheduler_timeout,
         )
 
     tasks = [server.serve(), worker_task()]

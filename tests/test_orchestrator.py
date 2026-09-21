@@ -42,7 +42,7 @@ def test_freeshard_loop_runs_inside_pebble_gather(monkeypatch):
     async def fake_serve():
         pass
 
-    async def fake_worker_loop(queue, *, timeout_s, kb_path):
+    async def fake_worker_loop(queue, *, kb_path):
         pass
 
     monkeypatch.setattr(orchestrator, "_shutdown", False)

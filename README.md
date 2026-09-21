@@ -266,6 +266,7 @@ To enable:
    tz: Europe/Berlin         # optional; default CLAYDE_SCHEDULER_TZ
    enabled: true             # optional; default true
    title: keep-warm          # optional; label for logs only
+   timeout: 4h               # optional; default CLAYDE_SCHEDULER_TIMEOUT (300s)
    ---
    Run a trivial health check and confirm you are alive.
    ```
@@ -275,6 +276,20 @@ To enable:
    after the frontmatter is the prompt sent to Claude. Malformed files
    (missing/both schedule keys, bad cron, unterminated frontmatter) are
    logged and skipped, not ntfy'd — that would spam every poll tick.
+
+   `timeout` sets this task's own CLI timeout, overriding
+   `CLAYDE_SCHEDULER_TIMEOUT` for that one job — useful for a long overnight
+   deep-research run that needs more than the default budget. It accepts a
+   duration (`4h`, `90m`, `45s`) or a bare number of seconds, and is
+   hard-capped at 4 hours; a requested value above the cap is clamped and
+   logged, not rejected. A malformed `timeout` value makes the whole file
+   malformed, same as a bad `cron`.
+
+   Long-running tasks should have their prompt instruct the agent to persist
+   progress periodically (e.g. write interim findings to the KB inbox as it
+   goes), not just at the end. A run that hits a usage limit or its timeout
+   is a single unattended attempt with no auto-resume, so whatever interim
+   state it wrote is all that survives.
 
 A fired one-off task is moved to `~/clayde-tasks/done/<epoch>-<name>.md`
 rather than deleted, so it stays as a record of what ran and when. Recurring

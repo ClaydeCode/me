@@ -49,7 +49,7 @@ async def test_e2e_pebble_voice_command_to_ntfy(monkeypatch, tmp_path):
     q = JobQueue(maxsize=4)
     app = create_app(queue=q, expected_token="tok")
     worker_task = asyncio.create_task(
-        worker_mod.worker_loop(q, timeout_s=10, kb_path=str(tmp_path))
+        worker_mod.worker_loop(q, kb_path=str(tmp_path))
     )
 
     try:

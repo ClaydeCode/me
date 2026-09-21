@@ -16,6 +16,7 @@ class Job:
     text: str
     timestamp: int
     origin: str = "pebble"
+    timeout_s: int = 300
 
 
 class JobQueue:

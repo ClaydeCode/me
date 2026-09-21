@@ -39,7 +39,10 @@ def create_app(*, queue: JobQueue, expected_token: str) -> FastAPI:
         verify_bearer(authorization, expected=expected_token)
 
         job_id = str(uuid.uuid4())
-        job = Job(id=job_id, text=payload.text, timestamp=payload.timestamp)
+        job = Job(
+            id=job_id, text=payload.text, timestamp=payload.timestamp,
+            timeout_s=get_settings().pebble_timeout,
+        )
 
         tracer = get_tracer()
         with tracer.start_as_current_span("clayde.pebble.enqueue") as span:
