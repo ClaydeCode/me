@@ -12,7 +12,7 @@ import logging
 import signal
 import time
 
-from clayde.config import get_settings, setup_logging
+from clayde.config import bootstrap_process_env, get_settings, setup_logging
 from clayde.freeshard.loop import run_cycle
 
 log = logging.getLogger("clayde.freeshard.entry")
@@ -36,6 +36,7 @@ def run_loop() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
 
     setup_logging()
+    bootstrap_process_env()
     settings = get_settings()
 
     log.info("Starting Freeshard loop (interval=%ds)", settings.fs_loop_interval_s)

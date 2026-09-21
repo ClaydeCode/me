@@ -1,6 +1,8 @@
 """Configuration via pydantic-settings."""
 
 import logging
+import os
+import subprocess
 from pathlib import Path
 
 from github import Auth, Github
@@ -121,3 +123,32 @@ def setup_logging() -> None:
     root = logging.getLogger("clayde")
     root.setLevel(logging.INFO)
     root.addHandler(handler)
+
+
+log = logging.getLogger("clayde.config")
+
+
+def bootstrap_process_env() -> None:
+    """Give subprocesses of this process a usable git and `gh`.
+
+    `gh` reads GH_TOKEN from the environment and the container's git credential
+    helper is `!gh auth git-credential`, so without the token every push fails;
+    without an identity every commit fails. Both apply to the headless Claude
+    runs the scheduler and the Pebble worker start, not just to Freeshard work.
+    """
+    settings = get_settings()
+    if settings.github_token:
+        os.environ["GH_TOKEN"] = settings.github_token
+    if settings.effective_git_name:
+        _git_config("user.name", settings.effective_git_name)
+    if settings.git_email:
+        _git_config("user.email", settings.git_email)
+
+
+def _git_config(key: str, value: str) -> None:
+    r = subprocess.run(
+        ["git", "config", "--global", key, value],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        log.warning("git config --global %s failed: %s", key, r.stderr.strip())

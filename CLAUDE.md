@@ -33,7 +33,7 @@ The `gh` CLI is authenticated as the configured bot GitHub account and git is co
 # Source repository
 pyproject.toml          # hatchling build; console scripts: clayde, clayde-once
 CLAUDE.md               # this file — identity + project context
-Dockerfile              # Python 3.13-slim image with git, gh, uv
+Dockerfile              # Python 3.13-slim image with git, gh, uv, docker CLI
 docker-compose.yml      # container deployment config
 uv.lock
 src/clayde/

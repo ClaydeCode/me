@@ -1,6 +1,7 @@
 """Tests for clayde.config."""
 
 import logging
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -175,3 +176,36 @@ def test_scheduler_settings_defaults(monkeypatch):
     assert s.scheduler_interval_s == 30
     assert s.scheduler_tz == "Europe/Berlin"
     assert s.scheduler_timeout == 300
+
+
+class TestBootstrapProcessEnv:
+    def _settings(self, **kw):
+        base = dict(github_token="ghp_tok", git_name="ClaydeCode",
+                    git_email="clayde@example.net", github_username="ClaydeCode")
+        base.update(kw)
+        return Settings(_env_file=None, **base)
+
+    def test_exports_gh_token(self, monkeypatch):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        with patch("clayde.config.get_settings", return_value=self._settings()), \
+             patch("clayde.config.subprocess.run") as run:
+            clayde.config.bootstrap_process_env()
+        assert os.environ["GH_TOKEN"] == "ghp_tok"
+        assert run.called
+
+    def test_configures_git_identity(self, monkeypatch):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        with patch("clayde.config.get_settings", return_value=self._settings()), \
+             patch("clayde.config.subprocess.run") as run:
+            clayde.config.bootstrap_process_env()
+        configured = {c.args[0][3]: c.args[0][4] for c in run.call_args_list}
+        assert configured == {"user.name": "ClaydeCode", "user.email": "clayde@example.net"}
+
+    def test_skips_what_is_not_configured(self, monkeypatch):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        empty = self._settings(github_token="", git_name="", git_email="", github_username="")
+        with patch("clayde.config.get_settings", return_value=empty), \
+             patch("clayde.config.subprocess.run") as run:
+            clayde.config.bootstrap_process_env()
+        assert "GH_TOKEN" not in os.environ
+        assert not run.called

@@ -27,3 +27,6 @@ docker-compose.override.yml
 
 # SDD scratch
 .superpowers/
+
+# Worktrees
+.worktrees/
