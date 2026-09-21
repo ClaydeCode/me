@@ -39,7 +39,8 @@ async def invoke_claude_job(
         "-p", user_text,
         "--append-system-prompt", system_prompt,
         "--output-format", "json",
-        "--dangerously-skip-permissions",
+        "--permission-mode", "auto",
+        "--permission-prompts", "none",
     ]
     log.info("Invoking Claude CLI (cwd=%s, timeout=%ds)", cwd, timeout_s)
     proc = await asyncio.create_subprocess_exec(

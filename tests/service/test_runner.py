@@ -155,3 +155,29 @@ async def test_runner_returns_text_on_zero_exit(fake_subproc, tmp_path):
         system_prompt="sys", user_text="hi", cwd=str(tmp_path), timeout_s=5,
     )
     assert out == "ok"
+
+
+async def test_invoke_uses_auto_permission_mode(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        async def communicate(self):
+            return (b'{"result": "ok", "is_error": false}', b"")
+        def kill(self): pass
+        async def wait(self): return 0
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    await runner.invoke_claude_job(
+        system_prompt="s", user_text="u", cwd=str(tmp_path), timeout_s=5,
+    )
+    args = captured["args"]
+    assert "--permission-mode" in args
+    assert "auto" in args
+    assert "--permission-prompts" in args
+    assert "none" in args
+    assert "--dangerously-skip-permissions" not in args
