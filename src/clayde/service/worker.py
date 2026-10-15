@@ -68,6 +68,7 @@ async def process_job(job: Job, *, kb_path: str) -> None:
                 user_text=user_text,
                 cwd=kb_path,
                 timeout_s=job.timeout_s,
+                model=job.model,
             )
             payload = extract_notification_payload(output)
             if payload.title == _FALLBACK_TITLE:

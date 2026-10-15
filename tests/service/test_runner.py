@@ -157,6 +157,27 @@ async def test_runner_returns_text_on_zero_exit(fake_subproc, tmp_path):
     assert out == "ok"
 
 
+async def test_runner_adds_model_flag_when_set(fake_subproc, tmp_path):
+    fake_subproc["proc"] = _FakeProc(json.dumps({"result": "ok"}).encode())
+    await runner.invoke_claude_job(
+        system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
+        model="claude-fable-5-1",
+    )
+    cmd = fake_subproc["args"]
+    assert "--model" in cmd
+    idx = cmd.index("--model")
+    assert cmd[idx + 1] == "claude-fable-5-1"
+
+
+async def test_runner_omits_model_flag_when_absent(fake_subproc, tmp_path):
+    fake_subproc["proc"] = _FakeProc(json.dumps({"result": "ok"}).encode())
+    await runner.invoke_claude_job(
+        system_prompt="s", user_text="t", cwd=str(tmp_path), timeout_s=10,
+    )
+    cmd = fake_subproc["args"]
+    assert "--model" not in cmd
+
+
 async def test_invoke_uses_auto_permission_mode(monkeypatch, tmp_path):
     captured = {}
 
