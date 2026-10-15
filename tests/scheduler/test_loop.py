@@ -73,6 +73,22 @@ async def test_job_gets_default_timeout_when_absent(tmp_path):
     jobs = await _drain(q)
     assert jobs[0].timeout_s == 300
 
+async def test_job_gets_task_model(tmp_path):
+    _w(tmp_path, "call.md", 'at: 2026-09-21T08:00\nmodel: claude-fable-5-1')
+    q = JobQueue(maxsize=10)
+    now = datetime(2026, 9, 21, 8, 1, tzinfo=ZoneInfo(TZ))
+    run_tick(q, tasks_dir=tmp_path, state_path=tmp_path / "s.json", default_tz=TZ, now=now, default_timeout_s=300)
+    jobs = await _drain(q)
+    assert jobs[0].model == "claude-fable-5-1"
+
+async def test_job_gets_no_model_when_absent(tmp_path):
+    _w(tmp_path, "call.md", "at: 2026-09-21T08:00")
+    q = JobQueue(maxsize=10)
+    now = datetime(2026, 9, 21, 8, 1, tzinfo=ZoneInfo(TZ))
+    run_tick(q, tasks_dir=tmp_path, state_path=tmp_path / "s.json", default_tz=TZ, now=now, default_timeout_s=300)
+    jobs = await _drain(q)
+    assert jobs[0].model is None
+
 async def test_failing_task_does_not_lose_earlier_dedup(tmp_path, monkeypatch):
     # "a-cron.md" sorts before "b-oneoff.md" so the recurring task fires
     # first in the same tick as the one-off task that then blows up.

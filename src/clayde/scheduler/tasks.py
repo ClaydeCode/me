@@ -15,6 +15,18 @@ log = logging.getLogger("clayde.scheduler")
 
 MAX_TIMEOUT_S = 14400  # 4 hours
 
+# Model ids a scheduled task may request via the `model:` frontmatter key.
+# There is no live registry to validate against, so this list goes stale as
+# new model ids ship — update it by hand when they do.
+KNOWN_MODELS = {
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+}
+
 _TIMEOUT_RE = re.compile(r"^\s*(\d+)\s*([hms]?)\s*$")
 _TIMEOUT_UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600}
 
@@ -29,6 +41,7 @@ class ScheduledTask:
     timeout_s: int
     tz: ZoneInfo
     enabled: bool
+    model: str | None
 
 
 def _split_frontmatter(text: str) -> tuple[dict, str]:
@@ -67,6 +80,15 @@ def _parse_timeout(value, default_s: int) -> int:
     return max(1, requested)
 
 
+def _parse_model(value) -> str | None:
+    if value is None:
+        return None
+    model = str(value)
+    if model not in KNOWN_MODELS:
+        raise ValueError(f"bad model {value!r}")
+    return model
+
+
 def parse_task_file(path: Path, default_tz: str, default_timeout_s: int) -> ScheduledTask:
     data, body = _split_frontmatter(path.read_text())
 
@@ -94,10 +116,11 @@ def parse_task_file(path: Path, default_tz: str, default_timeout_s: int) -> Sche
     enabled = bool(data.get("enabled", True))
     title = data.get("title")
     timeout_s = _parse_timeout(data.get("timeout"), default_timeout_s)
+    model = _parse_model(data.get("model"))
     return ScheduledTask(
         path=path, prompt=body, cron=cron, at=at, tz=tz,
         enabled=enabled, title=str(title) if title is not None else None,
-        timeout_s=timeout_s,
+        timeout_s=timeout_s, model=model,
     )
 
 

@@ -17,6 +17,7 @@ class Job:
     timestamp: int
     origin: str = "pebble"
     timeout_s: int = 300
+    model: str | None = None
 
 
 class JobQueue:
