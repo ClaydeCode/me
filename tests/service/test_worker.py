@@ -184,6 +184,33 @@ async def test_scheduler_failure_notifies(monkeypatch, captured_ntfy, fake_skill
 
 
 @pytest.mark.asyncio
+async def test_process_job_forwards_model_to_invoke(monkeypatch, captured_ntfy, fake_skills):
+    captured = {}
+
+    async def fake_invoke(**kwargs):
+        captured.update(kwargs)
+        return '```json\n{"title": "saved", "body": "ok", "success": true}\n```'
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    job = Job(id="job-1", text="hello", timestamp=1000, timeout_s=10, model="claude-fable-5-1")
+    await worker.process_job(job, kb_path="/tmp")
+    assert captured["model"] == "claude-fable-5-1"
+
+
+@pytest.mark.asyncio
+async def test_process_job_forwards_none_model_when_absent(monkeypatch, captured_ntfy, fake_skills):
+    captured = {}
+
+    async def fake_invoke(**kwargs):
+        captured.update(kwargs)
+        return '```json\n{"title": "saved", "body": "ok", "success": true}\n```'
+
+    monkeypatch.setattr(worker, "invoke_claude_job", fake_invoke)
+    await worker.process_job(_job(), kb_path="/tmp")
+    assert captured["model"] is None
+
+
+@pytest.mark.asyncio
 async def test_pebble_success_still_notifies(monkeypatch, captured_ntfy, fake_skills):
     async def fake_invoke(**kwargs):
         return '```json\n{"title": "saved", "body": "wrote inbox/x.md", "success": true}\n```'
