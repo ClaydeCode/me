@@ -95,3 +95,23 @@ def test_timeout_malformed_skipped_by_discover(tmp_path):
     _w(tmp_path / "bad.md", 'cron: "0 8 * * *"\ntimeout: soon')
     tasks = discover_tasks(tmp_path, "Europe/Berlin", DEFAULT_TIMEOUT_S)
     assert tasks == []
+
+def test_model_absent_is_none(tmp_path):
+    f = tmp_path / "k.md"; _w(f, 'cron: "0 8 * * *"')
+    t = parse_task_file(f, "Europe/Berlin", DEFAULT_TIMEOUT_S)
+    assert t.model is None
+
+def test_model_known_id_accepted(tmp_path):
+    f = tmp_path / "k.md"; _w(f, 'cron: "0 8 * * *"\nmodel: claude-fable-5-1')
+    t = parse_task_file(f, "Europe/Berlin", DEFAULT_TIMEOUT_S)
+    assert t.model == "claude-fable-5-1"
+
+def test_model_unrecognized_rejected(tmp_path):
+    f = tmp_path / "k.md"; _w(f, 'cron: "0 8 * * *"\nmodel: claude-made-up-9000')
+    with pytest.raises(ValueError):
+        parse_task_file(f, "Europe/Berlin", DEFAULT_TIMEOUT_S)
+
+def test_model_malformed_skipped_by_discover(tmp_path):
+    _w(tmp_path / "bad.md", 'cron: "0 8 * * *"\nmodel: claude-made-up-9000')
+    tasks = discover_tasks(tmp_path, "Europe/Berlin", DEFAULT_TIMEOUT_S)
+    assert tasks == []
