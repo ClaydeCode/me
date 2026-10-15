@@ -78,7 +78,7 @@ def run_tick(queue: JobQueue, *, tasks_dir: Path, state_path: Path,
             text = f"{note}\n{task.prompt}" if note else task.prompt
             job = Job(id=str(uuid.uuid4()), text=text,
                       timestamp=int(now.timestamp()), origin="scheduler",
-                      timeout_s=task.timeout_s)
+                      timeout_s=task.timeout_s, model=task.model)
             try:
                 queue.enqueue(job)
             except QueueFullError:
