@@ -157,6 +157,13 @@ container as its Claude config dir. Two things matter here:
   that state to the container. A separate login also gives the container its own
   OAuth refresh-token lineage, so its token refreshes can't invalidate your
   host login (refresh tokens are single-use).
+- **The container's `CLAUDE_CONFIG_DIR` must match the mount path
+  (`/home/clayde/.claude`).** This is set in `docker-compose.yml`, mirroring the
+  env var used for the one-time login above. Without it, the CLI falls back to
+  its default `$HOME/.claude.json` for top-level config (project trust state
+  among it) — a path that sits outside the mount and is wiped on every
+  container restart, surfacing as "Claude configuration file not found" on the
+  next run and a loss of trusted-project state after.
 
 ### 5. Start the container
 

@@ -230,7 +230,7 @@ Two backends, selected by `CLAYDE_CLAUDE_BACKEND`:
 - Session resumption: saves `session_id` from JSON output, resumes via `--resume <session_id>`
 - Rate/usage limit detection: text-pattern matching on stdout/stderr
 - No per-token cost tracking (returns `cost_eur=0.0`)
-- Requires: a dedicated Claude config dir dir-mounted from the host (`~/clayde-claude` → `/home/clayde/.claude`); use a separate `CLAUDE_CONFIG_DIR=~/clayde-claude claude login`. Mount the directory, not the `.credentials.json` file — token refresh renames the file (new inode) and a single-file mount goes stale. See docker-compose.yml / README.
+- Requires: a dedicated Claude config dir dir-mounted from the host (`~/clayde-claude` → `/home/clayde/.claude`); use a separate `CLAUDE_CONFIG_DIR=~/clayde-claude claude login`. Mount the directory, not the `.credentials.json` file — token refresh renames the file (new inode) and a single-file mount goes stale. The container itself must also set `CLAUDE_CONFIG_DIR=/home/clayde/.claude`, or the CLI's top-level config file (project trust state) defaults to the unmounted `$HOME/.claude.json` and is lost on every restart. See docker-compose.yml / README.
 
 ---
 
