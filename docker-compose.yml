@@ -41,6 +41,16 @@ services:
       - "8080"
     environment:
       - CLAYDE_ENABLED=true
+      # Must match the CLAUDE_CONFIG_DIR used for the one-time host login
+      # below, so the CLI reads/writes its top-level config file inside the
+      # mounted (persistent) directory instead of defaulting to $HOME/.claude.json
+      # — a path outside the mount that is wiped on every container restart.
+      # Without this, the CLI errors with "Claude configuration file not
+      # found" on the first run after a restart, and the recreated file lacks
+      # prior project-trust state, so settings.local.json's permissions.allow
+      # entries get silently ignored until a human re-accepts the trust dialog
+      # — impossible for a headless scheduled/Pebble run.
+      - CLAUDE_CONFIG_DIR=/home/clayde/.claude
     volumes:
       - ./data:/data
       # Dedicated Claude config dir for the container (required when
